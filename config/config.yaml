@@ -1,0 +1,96 @@
+# IEC61850 Simulator Configuration
+# ==================================
+
+application:
+  name: "IEC61850 Simulator"
+  version: "1.0.0"
+  language: "zh-CN"
+  theme: "fusion"  # fusion, windows, macos
+
+# 服务端配置
+server:
+  # 网络设置
+  network:
+    ip_address: "0.0.0.0"
+    port: 102  # MMS default port
+    max_connections: 10
+  
+  # IED配置
+  ied:
+    name: "SimulatedIED"
+    manufacturer: "IEC61850Simulator"
+    model: "VirtualIED-1000"
+    revision: "1.0"
+    
+  # 数据模型配置
+  data_model:
+    scl_file: ""  # 可选的SCL/ICD文件路径
+    auto_generate: true  # 自动生成默认数据模型
+    
+  # 数据更新设置  
+  simulation:
+    update_interval_ms: 1000  # 数据更新间隔(毫秒)
+    enable_random_values: true  # 启用随机值生成
+    
+  # GOOSE发布设置
+  goose:
+    enabled: false
+    multicast_address: "01-0C-CD-01-00-00"
+    app_id: 0x0001
+    
+  # 报告配置
+  reporting:
+    enabled: true
+    buffer_size: 100
+    trigger_options:
+      data_change: true
+      quality_change: true
+      data_update: false
+      integrity: true
+      general_interrogation: true
+
+# 客户端配置
+client:
+  # 默认连接设置
+  connection:
+    timeout_ms: 5000
+    retry_count: 3
+    retry_interval_ms: 1000
+    
+  # 数据订阅设置
+  subscription:
+    polling_interval_ms: 1000
+    enable_reporting: true
+    
+  # 已保存的服务器列表
+  saved_servers:
+    - name: "本地测试服务器"
+      ip: "127.0.0.1"
+      port: 102
+    - name: "示例服务器"
+      ip: "192.168.1.100"
+      port: 102
+
+# 日志配置
+logging:
+  level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR
+  file_enabled: true
+  file_path: "logs/simulator.log"
+  max_file_size_mb: 10
+  backup_count: 5
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {module}:{function}:{line} | {message}"
+
+# GUI设置
+gui:
+  window:
+    width: 1400
+    height: 900
+    remember_position: true
+    
+  data_view:
+    refresh_rate_ms: 500
+    tree_expand_level: 2
+    
+  charts:
+    max_points: 1000
+    update_interval_ms: 100

@@ -1,0 +1,12 @@
+[project]
+name = "iec61850-simulator"
+version = "0.1.0"
+description = "A simulator for IEC61850 client and server communication."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "loguru>=0.7.3",
+    "pyqt6>=6.10.2",
+    "pyyaml>=6.0.3",
+    "requests>=2.32.5",
+]

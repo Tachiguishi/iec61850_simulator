@@ -1,0 +1,352 @@
+# IEC61850 Simulator - 示例数据模型配置
+# 定义一个简单的保护IED数据模型
+
+ied:
+  name: "ProtectionIED"
+  description: "保护装置仿真器"
+  
+  # 访问点
+  access_points:
+    - name: "S1"
+      description: "主访问点"
+      
+  # 逻辑设备
+  logical_devices:
+    - name: "PROT"
+      description: "保护逻辑设备"
+      
+      # 逻辑节点
+      logical_nodes:
+        # 逻辑节点零 - 公共信息
+        - name: "LLN0"
+          class: "LLN0"
+          description: "逻辑节点零"
+          data_objects:
+            - name: "Mod"
+              cdc: "ENC"
+              description: "模式"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                - name: "q"
+                  type: "Quality"
+                  value: 0
+                - name: "t"
+                  type: "Timestamp"
+                  
+            - name: "Beh"
+              cdc: "ENS"
+              description: "行为"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                - name: "q"
+                  type: "Quality"
+                  value: 0
+                  
+            - name: "Health"
+              cdc: "ENS"
+              description: "健康状态"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                - name: "q"
+                  type: "Quality"
+                  value: 0
+        
+        # 物理设备信息
+        - name: "LPHD1"
+          class: "LPHD"
+          description: "物理设备信息"
+          data_objects:
+            - name: "PhyNam"
+              cdc: "DPL"
+              description: "物理名称"
+              data_attributes:
+                - name: "vendor"
+                  type: "VisString255"
+                  value: "IEC61850Simulator"
+                - name: "hwRev"
+                  type: "VisString255"
+                  value: "1.0"
+                - name: "swRev"
+                  type: "VisString255"
+                  value: "1.0.0"
+                  
+            - name: "PhyHealth"
+              cdc: "ENS"
+              description: "物理健康状态"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                  
+            - name: "Proxy"
+              cdc: "SPS"
+              description: "代理标志"
+              data_attributes:
+                - name: "stVal"
+                  type: "BOOLEAN"
+                  value: false
+        
+        # 过流保护
+        - name: "PTOC1"
+          class: "PTOC"
+          description: "过流保护"
+          data_objects:
+            - name: "Mod"
+              cdc: "ENC"
+              description: "模式"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                - name: "ctlModel"
+                  type: "Enum"
+                  value: 0
+                  
+            - name: "Beh"
+              cdc: "ENS"
+              description: "行为"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                  
+            - name: "Op"
+              cdc: "ACT"
+              description: "动作"
+              data_attributes:
+                - name: "general"
+                  type: "BOOLEAN"
+                  value: false
+                - name: "phsA"
+                  type: "BOOLEAN"
+                  value: false
+                - name: "phsB"
+                  type: "BOOLEAN"
+                  value: false
+                - name: "phsC"
+                  type: "BOOLEAN"
+                  value: false
+                - name: "q"
+                  type: "Quality"
+                  value: 0
+                - name: "t"
+                  type: "Timestamp"
+                  
+            - name: "Str"
+              cdc: "ACD"
+              description: "启动"
+              data_attributes:
+                - name: "general"
+                  type: "BOOLEAN"
+                  value: false
+                - name: "dirGeneral"
+                  type: "Enum"
+                  value: 0
+                  
+            - name: "TmACrv"
+              cdc: "CURVE"
+              description: "时间电流曲线"
+              data_attributes:
+                - name: "setCharact"
+                  type: "Enum"
+                  value: 1
+                  
+        # 断路器
+        - name: "XCBR1"
+          class: "XCBR"
+          description: "断路器"
+          data_objects:
+            - name: "Mod"
+              cdc: "ENC"
+              description: "模式"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                  
+            - name: "Beh"
+              cdc: "ENS"
+              description: "行为"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                  
+            - name: "Pos"
+              cdc: "DPC"
+              description: "位置"
+              data_attributes:
+                - name: "stVal"
+                  type: "Dbpos"
+                  value: 2  # 2=on, 1=off
+                - name: "q"
+                  type: "Quality"
+                  value: 0
+                - name: "t"
+                  type: "Timestamp"
+                - name: "ctlModel"
+                  type: "Enum"
+                  value: 2  # direct-with-normal-security
+                  
+            - name: "BlkOpn"
+              cdc: "SPC"
+              description: "闭锁分闸"
+              data_attributes:
+                - name: "stVal"
+                  type: "BOOLEAN"
+                  value: false
+                - name: "ctlModel"
+                  type: "Enum"
+                  value: 1
+                  
+            - name: "BlkCls"
+              cdc: "SPC"
+              description: "闭锁合闸"
+              data_attributes:
+                - name: "stVal"
+                  type: "BOOLEAN"
+                  value: false
+                - name: "ctlModel"
+                  type: "Enum"
+                  value: 1
+                  
+    - name: "MEAS"
+      description: "测量逻辑设备"
+      
+      logical_nodes:
+        - name: "LLN0"
+          class: "LLN0"
+          description: "逻辑节点零"
+          data_objects:
+            - name: "Mod"
+              cdc: "ENC"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                  
+            - name: "Beh"
+              cdc: "ENS"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+        
+        # 测量单元
+        - name: "MMXU1"
+          class: "MMXU"
+          description: "测量单元"
+          data_objects:
+            - name: "Mod"
+              cdc: "ENC"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                  
+            - name: "Beh"
+              cdc: "ENS"
+              data_attributes:
+                - name: "stVal"
+                  type: "Enum"
+                  value: 1
+                  
+            - name: "TotW"
+              cdc: "MV"
+              description: "总有功功率"
+              data_attributes:
+                - name: "mag"
+                  type: "AnalogueValue"
+                  value: 1000.0
+                - name: "q"
+                  type: "Quality"
+                  value: 0
+                - name: "t"
+                  type: "Timestamp"
+                - name: "units"
+                  type: "Unit"
+                  value: "W"
+                  
+            - name: "TotVAr"
+              cdc: "MV"
+              description: "总无功功率"
+              data_attributes:
+                - name: "mag"
+                  type: "AnalogueValue"
+                  value: 200.0
+                - name: "q"
+                  type: "Quality"
+                  value: 0
+                - name: "t"
+                  type: "Timestamp"
+                - name: "units"
+                  type: "Unit"
+                  value: "VAr"
+                  
+            - name: "Hz"
+              cdc: "MV"
+              description: "频率"
+              data_attributes:
+                - name: "mag"
+                  type: "AnalogueValue"
+                  value: 50.0
+                - name: "q"
+                  type: "Quality"
+                  value: 0
+                - name: "t"
+                  type: "Timestamp"
+                - name: "units"
+                  type: "Unit"
+                  value: "Hz"
+                  
+            - name: "PPV"
+              cdc: "WYE"
+              description: "相间电压"
+              data_attributes:
+                - name: "phsAB"
+                  type: "CMV"
+                  sub_attributes:
+                    - name: "cVal.mag"
+                      type: "AnalogueValue"
+                      value: 10000.0
+                - name: "phsBC"
+                  type: "CMV"
+                  sub_attributes:
+                    - name: "cVal.mag"
+                      type: "AnalogueValue"
+                      value: 10000.0
+                - name: "phsCA"
+                  type: "CMV"
+                  sub_attributes:
+                    - name: "cVal.mag"
+                      type: "AnalogueValue"
+                      value: 10000.0
+                      
+            - name: "A"
+              cdc: "WYE"
+              description: "相电流"
+              data_attributes:
+                - name: "phsA"
+                  type: "CMV"
+                  sub_attributes:
+                    - name: "cVal.mag"
+                      type: "AnalogueValue"
+                      value: 100.0
+                - name: "phsB"
+                  type: "CMV"
+                  sub_attributes:
+                    - name: "cVal.mag"
+                      type: "AnalogueValue"
+                      value: 100.0
+                - name: "phsC"
+                  type: "CMV"
+                  sub_attributes:
+                    - name: "cVal.mag"
+                      type: "AnalogueValue"
+                      value: 100.0
