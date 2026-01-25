@@ -3,6 +3,7 @@ Main Window
 ===========
 
 IEC61850仿真器主窗口，支持服务端/客户端模式切换
+使用UI文件进行界面绘制
 """
 
 from __future__ import annotations
@@ -11,13 +12,13 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QSettings, QSize, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon, QFont, QCloseEvent
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
-    QToolBar, QStatusBar, QLabel, QPushButton, QButtonGroup,
-    QSplitter, QMessageBox, QApplication, QFrame, QSizePolicy
+    QMainWindow, QWidget, QVBoxLayout, QButtonGroup,
+    QMessageBox, QLabel, QFileDialog
 )
+from PyQt6 import uic
 
 import yaml
 from loguru import logger
@@ -29,38 +30,32 @@ from gui.server_panel import ServerPanel
 from gui.client_panel import ClientPanel
 from gui.log_widget import LogWidget
 
+# UI文件路径
+UI_DIR = Path(__file__).parent / "ui"
 
-class ModeButton(QPushButton):
-    """模式选择按钮"""
-    
-    def __init__(self, text: str, icon_name: str = "", parent: Optional[QWidget] = None):
-        super().__init__(text, parent)
-        self.setCheckable(True)
-        self.setMinimumHeight(50)
-        self.setMinimumWidth(150)
-        self.setFont(QFont("Microsoft YaHei", 11))
-        
-        self.setStyleSheet("""
-            QPushButton {
-                background-color: #f0f0f0;
-                border: 2px solid #c0c0c0;
-                border-radius: 8px;
-                padding: 10px 20px;
-                color: #333;
-            }
-            QPushButton:hover {
-                background-color: #e0e0e0;
-                border-color: #a0a0a0;
-            }
-            QPushButton:checked {
-                background-color: #0078d4;
-                border-color: #0066b8;
-                color: white;
-            }
-            QPushButton:checked:hover {
-                background-color: #006cc1;
-            }
-        """)
+
+# 模式按钮样式
+MODE_BUTTON_STYLE = """
+    QPushButton {
+        background-color: #f0f0f0;
+        border: 2px solid #c0c0c0;
+        border-radius: 8px;
+        padding: 10px 20px;
+        color: #333;
+    }
+    QPushButton:hover {
+        background-color: #e0e0e0;
+        border-color: #a0a0a0;
+    }
+    QPushButton:checked {
+        background-color: #0078d4;
+        border-color: #0066b8;
+        color: white;
+    }
+    QPushButton:checked:hover {
+        background-color: #006cc1;
+    }
+"""
 
 
 class MainWindow(QMainWindow):
@@ -81,16 +76,16 @@ class MainWindow(QMainWindow):
         
         self.settings = QSettings("IEC61850Simulator", "MainWindow")
         self.config = self._load_config()
-        
         self.current_mode = "server"
         
-        self._init_ui()
-        self._init_menu()
-        self._init_toolbar()
-        self._init_statusbar()
-        self._restore_geometry()
+        # 加载UI文件
+        uic.loadUi(UI_DIR / "main_window.ui", self)
         
-        # 连接日志
+        self._init_ui()
+        self._init_panels()
+        self._connect_signals()
+        self._init_statusbar_widgets()
+        self._restore_geometry()
         self._setup_logging()
     
     def _load_config(self) -> dict:
@@ -109,162 +104,71 @@ class MainWindow(QMainWindow):
         }
     
     def _init_ui(self):
-        """初始化UI"""
+        """初始化UI附加设置"""
         app_config = self.config.get("application", {})
         self.setWindowTitle(f"{app_config.get('name', 'IEC61850 Simulator')} v{app_config.get('version', '1.0.0')}")
         
         gui_config = self.config.get("gui", {}).get("window", {})
         self.resize(gui_config.get("width", 1400), gui_config.get("height", 900))
         
-        # 中央widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
-        
-        # 模式选择区
-        mode_frame = QFrame()
-        mode_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-        mode_layout = QHBoxLayout(mode_frame)
-        mode_layout.setContentsMargins(20, 15, 20, 15)
-        
-        mode_label = QLabel("选择模式:")
-        mode_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
-        mode_layout.addWidget(mode_label)
-        
-        mode_layout.addSpacing(20)
-        
-        # 服务端模式按钮
-        self.server_mode_btn = ModeButton("🖥️ 服务端模式")
-        self.server_mode_btn.setChecked(True)
-        self.server_mode_btn.setToolTip("仿真IED设备，作为MMS服务器运行")
-        
-        # 客户端模式按钮
-        self.client_mode_btn = ModeButton("💻 客户端模式")
-        self.client_mode_btn.setToolTip("连接到IED设备，读写数据点")
+        # 设置模式按钮样式
+        self.serverModeBtn.setStyleSheet(MODE_BUTTON_STYLE)
+        self.clientModeBtn.setStyleSheet(MODE_BUTTON_STYLE)
         
         # 按钮组（互斥选择）
         self.mode_group = QButtonGroup(self)
-        self.mode_group.addButton(self.server_mode_btn, 0)
-        self.mode_group.addButton(self.client_mode_btn, 1)
-        self.mode_group.buttonClicked.connect(self._on_mode_changed)
+        self.mode_group.addButton(self.serverModeBtn, 0)
+        self.mode_group.addButton(self.clientModeBtn, 1)
         
-        mode_layout.addWidget(self.server_mode_btn)
-        mode_layout.addWidget(self.client_mode_btn)
-        mode_layout.addStretch()
-        
-        # 模式说明
-        self.mode_desc_label = QLabel()
-        self.mode_desc_label.setStyleSheet("color: #666; font-style: italic;")
-        self._update_mode_description()
-        mode_layout.addWidget(self.mode_desc_label)
-        
-        main_layout.addWidget(mode_frame)
-        
-        # 主分割器 (上: 功能面板, 下: 日志)
-        self.main_splitter = QSplitter(Qt.Orientation.Vertical)
-        
-        # 功能面板区域（堆叠窗口）
-        self.panel_stack = QStackedWidget()
-        
+        # 设置分割器大小
+        self.mainSplitter.setSizes([600, 200])
+        self.mainSplitter.setStretchFactor(0, 3)
+        self.mainSplitter.setStretchFactor(1, 1)
+    
+    def _init_panels(self):
+        """初始化功能面板"""
         # 服务端面板
         self.server_panel = ServerPanel(self.config)
-        self.panel_stack.addWidget(self.server_panel)
+        self.panelStack.addWidget(self.server_panel)
         
         # 客户端面板
         self.client_panel = ClientPanel(self.config)
-        self.panel_stack.addWidget(self.client_panel)
-        
-        self.main_splitter.addWidget(self.panel_stack)
+        self.panelStack.addWidget(self.client_panel)
         
         # 日志面板
         self.log_widget = LogWidget()
-        self.main_splitter.addWidget(self.log_widget)
+        layout = QVBoxLayout(self.logWidgetContainer)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.log_widget)
         
-        # 设置分割比例
-        self.main_splitter.setSizes([600, 200])
-        self.main_splitter.setStretchFactor(0, 3)
-        self.main_splitter.setStretchFactor(1, 1)
-        
-        main_layout.addWidget(self.main_splitter)
+        # 连接面板日志
+        self.server_panel.log_message.connect(
+            lambda level, msg: self.log_widget.append_log(level, msg)
+        )
+        self.client_panel.log_message.connect(
+            lambda level, msg: self.log_widget.append_log(level, msg)
+        )
     
-    def _init_menu(self):
-        """初始化菜单栏"""
-        menubar = self.menuBar()
+    def _connect_signals(self):
+        """连接信号"""
+        # 模式切换
+        self.mode_group.buttonClicked.connect(self._on_mode_changed)
         
-        # 文件菜单
-        file_menu = menubar.addMenu("文件(&F)")
+        # 菜单操作
+        self.actionLoadConfig.triggered.connect(self._on_load_config)
+        self.actionSaveConfig.triggered.connect(self._on_save_config)
+        self.actionExit.triggered.connect(self.close)
+        self.actionShowLog.triggered.connect(self._toggle_log_panel)
+        self.actionClearLog.triggered.connect(self.log_widget.clear)
+        self.actionAbout.triggered.connect(self._show_about)
         
-        load_config_action = QAction("加载配置(&L)...", self)
-        load_config_action.setShortcut("Ctrl+O")
-        load_config_action.triggered.connect(self._on_load_config)
-        file_menu.addAction(load_config_action)
-        
-        save_config_action = QAction("保存配置(&S)...", self)
-        save_config_action.setShortcut("Ctrl+S")
-        save_config_action.triggered.connect(self._on_save_config)
-        file_menu.addAction(save_config_action)
-        
-        file_menu.addSeparator()
-        
-        exit_action = QAction("退出(&X)", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-        
-        # 视图菜单
-        view_menu = menubar.addMenu("视图(&V)")
-        
-        self.show_log_action = QAction("显示日志面板(&L)", self)
-        self.show_log_action.setCheckable(True)
-        self.show_log_action.setChecked(True)
-        self.show_log_action.triggered.connect(self._toggle_log_panel)
-        view_menu.addAction(self.show_log_action)
-        
-        clear_log_action = QAction("清除日志(&C)", self)
-        clear_log_action.triggered.connect(self.log_widget.clear)
-        view_menu.addAction(clear_log_action)
-        
-        # 帮助菜单
-        help_menu = menubar.addMenu("帮助(&H)")
-        
-        about_action = QAction("关于(&A)...", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
+        # 工具栏操作
+        self.actionStart.triggered.connect(self._on_start)
+        self.actionStop.triggered.connect(self._on_stop)
+        self.actionRefresh.triggered.connect(self._on_refresh)
     
-    def _init_toolbar(self):
-        """初始化工具栏"""
-        toolbar = QToolBar("主工具栏")
-        toolbar.setMovable(False)
-        toolbar.setIconSize(QSize(24, 24))
-        self.addToolBar(toolbar)
-        
-        # 快速操作按钮
-        self.start_action = QAction("▶ 启动", self)
-        self.start_action.setToolTip("启动服务/连接")
-        self.start_action.triggered.connect(self._on_start)
-        toolbar.addAction(self.start_action)
-        
-        self.stop_action = QAction("⏹ 停止", self)
-        self.stop_action.setToolTip("停止服务/断开连接")
-        self.stop_action.setEnabled(False)
-        self.stop_action.triggered.connect(self._on_stop)
-        toolbar.addAction(self.stop_action)
-        
-        toolbar.addSeparator()
-        
-        refresh_action = QAction("🔄 刷新", self)
-        refresh_action.setToolTip("刷新数据")
-        refresh_action.triggered.connect(self._on_refresh)
-        toolbar.addAction(refresh_action)
-    
-    def _init_statusbar(self):
-        """初始化状态栏"""
-        self.statusbar = QStatusBar()
-        self.setStatusBar(self.statusbar)
-        
+    def _init_statusbar_widgets(self):
+        """初始化状态栏控件"""
         # 模式标签
         self.mode_status_label = QLabel("模式: 服务端")
         self.statusbar.addWidget(self.mode_status_label)
@@ -289,7 +193,6 @@ class MainWindow(QMainWindow):
     
     def _setup_logging(self):
         """设置日志"""
-        # 将loguru日志输出到GUI
         def log_handler(message):
             record = message.record
             level = record["level"].name.lower()
@@ -297,56 +200,42 @@ class MainWindow(QMainWindow):
             self.log_widget.append_log(level, text)
         
         logger.add(log_handler, format="{message}", level="DEBUG")
-        
-        # 连接面板日志
-        self.server_panel.log_message.connect(
-            lambda level, msg: self.log_widget.append_log(level, msg)
-        )
-        self.client_panel.log_message.connect(
-            lambda level, msg: self.log_widget.append_log(level, msg)
-        )
     
     # ========================================================================
     # 事件处理
     # ========================================================================
     
-    def _on_mode_changed(self, button: QPushButton):
+    def _on_mode_changed(self, button):
         """模式切换"""
-        if button == self.server_mode_btn:
+        if button == self.serverModeBtn:
             self.current_mode = "server"
-            self.panel_stack.setCurrentIndex(0)
+            self.panelStack.setCurrentIndex(0)
             self.mode_status_label.setText("模式: 服务端")
-            self.start_action.setText("▶ 启动服务")
-            self.stop_action.setText("⏹ 停止服务")
+            self.actionStart.setText("▶ 启动服务")
+            self.actionStop.setText("⏹ 停止服务")
+            self.modeDescLabel.setText("仿真IED设备，提供MMS服务端功能")
         else:
             self.current_mode = "client"
-            self.panel_stack.setCurrentIndex(1)
+            self.panelStack.setCurrentIndex(1)
             self.mode_status_label.setText("模式: 客户端")
-            self.start_action.setText("▶ 连接")
-            self.stop_action.setText("⏹ 断开")
+            self.actionStart.setText("▶ 连接")
+            self.actionStop.setText("⏹ 断开")
+            self.modeDescLabel.setText("连接到IED设备，进行数据读写和控制")
         
-        self._update_mode_description()
         self.mode_changed.emit(self.current_mode)
         logger.info(f"Switched to {self.current_mode} mode")
-    
-    def _update_mode_description(self):
-        """更新模式说明"""
-        if self.current_mode == "server":
-            self.mode_desc_label.setText("仿真IED设备，提供MMS服务端功能")
-        else:
-            self.mode_desc_label.setText("连接到IED设备，进行数据读写和控制")
     
     def _on_start(self):
         """启动/连接"""
         if self.current_mode == "server":
             if self.server_panel.start_server():
-                self.start_action.setEnabled(False)
-                self.stop_action.setEnabled(True)
+                self.actionStart.setEnabled(False)
+                self.actionStop.setEnabled(True)
                 self.status_label.setText("服务运行中")
         else:
             if self.client_panel.connect():
-                self.start_action.setEnabled(False)
-                self.stop_action.setEnabled(True)
+                self.actionStart.setEnabled(False)
+                self.actionStop.setEnabled(True)
                 self.status_label.setText("已连接")
     
     def _on_stop(self):
@@ -356,8 +245,8 @@ class MainWindow(QMainWindow):
         else:
             self.client_panel.disconnect()
         
-        self.start_action.setEnabled(True)
-        self.stop_action.setEnabled(False)
+        self.actionStart.setEnabled(True)
+        self.actionStop.setEnabled(False)
         self.status_label.setText("就绪")
     
     def _on_refresh(self):
@@ -369,12 +258,10 @@ class MainWindow(QMainWindow):
     
     def _toggle_log_panel(self, checked: bool):
         """切换日志面板显示"""
-        self.log_widget.setVisible(checked)
+        self.logWidgetContainer.setVisible(checked)
     
     def _on_load_config(self):
         """加载配置"""
-        from PyQt6.QtWidgets import QFileDialog
-        
         file_path, _ = QFileDialog.getOpenFileName(
             self, "加载配置文件", "", "YAML Files (*.yaml *.yml);;All Files (*)"
         )
@@ -391,8 +278,6 @@ class MainWindow(QMainWindow):
     
     def _on_save_config(self):
         """保存配置"""
-        from PyQt6.QtWidgets import QFileDialog
-        
         file_path, _ = QFileDialog.getSaveFileName(
             self, "保存配置文件", "", "YAML Files (*.yaml *.yml);;All Files (*)"
         )

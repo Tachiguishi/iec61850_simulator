@@ -3,19 +3,24 @@ Data Tree Widget
 ================
 
 IEC61850数据模型树形显示控件
+使用UI文件进行界面绘制
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Callable
+from pathlib import Path
+from typing import Any, Dict, Optional
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QColor, QBrush, QIcon
+from PyQt6.QtGui import QFont, QColor, QBrush
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QLineEdit, QPushButton, QMenu, QHeaderView, QLabel, QFrame
+    QWidget, QTreeWidgetItem, QMenu, QHeaderView, QApplication, QInputDialog
 )
+from PyQt6 import uic
+
+# UI文件路径
+UI_DIR = Path(__file__).parent / "ui"
 
 
 class DataTreeWidget(QWidget):
@@ -34,6 +39,7 @@ class DataTreeWidget(QWidget):
     item_selected = pyqtSignal(str)
     item_double_clicked = pyqtSignal(str)
     value_changed = pyqtSignal(str, object)
+    refresh_requested = pyqtSignal()
     
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -41,50 +47,14 @@ class DataTreeWidget(QWidget):
         self._data_items: Dict[str, QTreeWidgetItem] = {}
         self._expand_level = 2
         
+        # 加载UI文件
+        uic.loadUi(UI_DIR / "data_tree_widget.ui", self)
+        
         self._init_ui()
+        self._connect_signals()
     
     def _init_ui(self):
-        """初始化UI"""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-        
-        # 工具栏
-        toolbar = QHBoxLayout()
-        
-        # 搜索框
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索数据点...")
-        self.search_input.textChanged.connect(self._on_search)
-        toolbar.addWidget(self.search_input)
-        
-        # 展开/折叠按钮
-        expand_btn = QPushButton("全部展开")
-        expand_btn.clicked.connect(self._expand_all)
-        toolbar.addWidget(expand_btn)
-        
-        collapse_btn = QPushButton("全部折叠")
-        collapse_btn.clicked.connect(self._collapse_all)
-        toolbar.addWidget(collapse_btn)
-        
-        # 刷新按钮
-        refresh_btn = QPushButton("🔄")
-        refresh_btn.setToolTip("刷新")
-        refresh_btn.setMaximumWidth(30)
-        refresh_btn.clicked.connect(lambda: self.refresh_requested.emit() if hasattr(self, 'refresh_requested') else None)
-        toolbar.addWidget(refresh_btn)
-        
-        layout.addLayout(toolbar)
-        
-        # 树形控件
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["名称", "值", "类型", "质量", "时间戳"])
-        self.tree.setAlternatingRowColors(True)
-        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.tree.customContextMenuRequested.connect(self._show_context_menu)
-        self.tree.itemSelectionChanged.connect(self._on_selection_changed)
-        self.tree.itemDoubleClicked.connect(self._on_double_click)
-        
+        """初始化UI附加设置"""
         # 设置列宽
         header = self.tree.header()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -92,13 +62,17 @@ class DataTreeWidget(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+    
+    def _connect_signals(self):
+        """连接信号"""
+        self.searchInput.textChanged.connect(self._on_search)
+        self.expandBtn.clicked.connect(self._expand_all)
+        self.collapseBtn.clicked.connect(self._collapse_all)
+        self.refreshBtn.clicked.connect(self.refresh_requested.emit)
         
-        layout.addWidget(self.tree)
-        
-        # 状态标签
-        self.status_label = QLabel()
-        self.status_label.setStyleSheet("color: #666;")
-        layout.addWidget(self.status_label)
+        self.tree.customContextMenuRequested.connect(self._show_context_menu)
+        self.tree.itemSelectionChanged.connect(self._on_selection_changed)
+        self.tree.itemDoubleClicked.connect(self._on_double_click)
     
     def load_ied(self, ied_data: Dict):
         """
@@ -129,7 +103,7 @@ class DataTreeWidget(QWidget):
         
         # 更新状态
         count = len(self._data_items)
-        self.status_label.setText(f"共 {count} 个数据点")
+        self.statusLabel.setText(f"共 {count} 个数据点")
     
     def _add_logical_device(self, parent: QTreeWidgetItem, ied_name: str, 
                             ld_name: str, ld_data: Dict):
@@ -442,14 +416,11 @@ class DataTreeWidget(QWidget):
     
     def _copy_to_clipboard(self, text: str):
         """复制到剪贴板"""
-        from PyQt6.QtWidgets import QApplication
         clipboard = QApplication.clipboard()
         clipboard.setText(text)
     
     def _edit_value(self, reference: str, current_value: Any):
         """编辑值"""
-        from PyQt6.QtWidgets import QInputDialog
-        
         new_value, ok = QInputDialog.getText(
             self,
             "修改值",

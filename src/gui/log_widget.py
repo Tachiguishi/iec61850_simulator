@@ -3,19 +3,22 @@ Log Widget
 ==========
 
 日志显示控件
+使用UI文件进行界面绘制
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
-    QComboBox, QLabel, QCheckBox
-)
+from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PyQt6.QtWidgets import QWidget, QFileDialog
+from PyQt6 import uic
+
+# UI文件路径
+UI_DIR = Path(__file__).parent / "ui"
 
 
 class LogWidget(QWidget):
@@ -48,63 +51,19 @@ class LogWidget(QWidget):
         self._filter_level = "debug"
         self._max_lines = 5000
         
-        self._init_ui()
+        # 加载UI文件
+        uic.loadUi(UI_DIR / "log_widget.ui", self)
+        
+        self._connect_signals()
     
-    def _init_ui(self):
-        """初始化UI"""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-        
-        # 工具栏
-        toolbar = QHBoxLayout()
-        
-        # 标题
-        title = QLabel("📋 日志")
-        title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
-        toolbar.addWidget(title)
-        
-        toolbar.addStretch()
-        
-        # 级别过滤
-        toolbar.addWidget(QLabel("级别:"))
-        self.level_combo = QComboBox()
-        self.level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
-        self.level_combo.setCurrentText("DEBUG")
-        self.level_combo.currentTextChanged.connect(self._on_level_changed)
-        toolbar.addWidget(self.level_combo)
-        
-        # 自动滚动
-        self.auto_scroll_check = QCheckBox("自动滚动")
-        self.auto_scroll_check.setChecked(True)
-        self.auto_scroll_check.stateChanged.connect(
+    def _connect_signals(self):
+        """连接信号"""
+        self.levelCombo.currentTextChanged.connect(self._on_level_changed)
+        self.autoScrollCheck.stateChanged.connect(
             lambda state: setattr(self, '_auto_scroll', state == Qt.CheckState.Checked.value)
         )
-        toolbar.addWidget(self.auto_scroll_check)
-        
-        # 清除按钮
-        clear_btn = QPushButton("清除")
-        clear_btn.clicked.connect(self.clear)
-        toolbar.addWidget(clear_btn)
-        
-        # 导出按钮
-        export_btn = QPushButton("导出")
-        export_btn.clicked.connect(self._export_log)
-        toolbar.addWidget(export_btn)
-        
-        layout.addLayout(toolbar)
-        
-        # 日志文本框
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Consolas", 9))
-        self.log_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #f8f8f8;
-                border: 1px solid #ddd;
-            }
-        """)
-        layout.addWidget(self.log_text)
+        self.clearBtn.clicked.connect(self.clear)
+        self.exportBtn.clicked.connect(self._export_log)
     
     def append_log(self, level: str, message: str, timestamp: Optional[datetime] = None):
         """
@@ -138,7 +97,7 @@ class LogWidget(QWidget):
         color = self.LEVEL_COLORS.get(level, QColor("#000000"))
         
         # 添加到文本框
-        cursor = self.log_text.textCursor()
+        cursor = self.logText.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         
         format = QTextCharFormat()
@@ -151,14 +110,14 @@ class LogWidget(QWidget):
         
         # 自动滚动
         if self._auto_scroll:
-            scrollbar = self.log_text.verticalScrollBar()
+            scrollbar = self.logText.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())
     
     def _limit_lines(self):
         """限制日志行数"""
-        document = self.log_text.document()
+        document = self.logText.document()
         if document.lineCount() > self._max_lines:
-            cursor = self.log_text.textCursor()
+            cursor = self.logText.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.Start)
             
             # 删除前1000行
@@ -169,7 +128,7 @@ class LogWidget(QWidget):
     
     def clear(self):
         """清除日志"""
-        self.log_text.clear()
+        self.logText.clear()
     
     def _on_level_changed(self, level: str):
         """级别过滤变化"""
@@ -177,8 +136,6 @@ class LogWidget(QWidget):
     
     def _export_log(self):
         """导出日志"""
-        from PyQt6.QtWidgets import QFileDialog
-        
         file_path, _ = QFileDialog.getSaveFileName(
             self, "导出日志", f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
             "Text Files (*.txt);;All Files (*)"
@@ -187,7 +144,7 @@ class LogWidget(QWidget):
         if file_path:
             try:
                 with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(self.log_text.toPlainText())
+                    f.write(self.logText.toPlainText())
                 self.log_exported.emit(file_path)
                 self.append_log("info", f"日志已导出到: {file_path}")
             except Exception as e:
@@ -195,7 +152,7 @@ class LogWidget(QWidget):
     
     def get_text(self) -> str:
         """获取日志文本"""
-        return self.log_text.toPlainText()
+        return self.logText.toPlainText()
     
     def set_max_lines(self, max_lines: int):
         """设置最大行数"""
