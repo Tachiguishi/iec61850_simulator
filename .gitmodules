@@ -1,4 +1,4 @@
-[submodule "deps/libiec61850"]
-	path = deps/libiec61850
+[submodule "src/libiec61850"]
+	path = src/libiec61850
 	url = git@github.com:mz-automation/libiec61850.git
 	branch = v1.6

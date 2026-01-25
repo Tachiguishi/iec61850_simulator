@@ -2,19 +2,20 @@
 IEC61850 Client Implementation
 ==============================
 
-实现IEC61850客户端功能，包括：
+实现IEC61850客户端功能, 使用libiec61850的Python绑定(pyiec61850):
 - 连接到IED服务器
 - 浏览数据模型
 - 读取/写入数据值
 - 控制操作
 - 报告订阅
+
+使用pyiec61850库实现标准MMS协议。
 """
 
 from __future__ import annotations
 
-import json
-import socket
-import struct
+import os
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,12 @@ from queue import Queue, Empty
 
 from loguru import logger
 
+try:
+    import pyiec61850 as iec61850
+    PYIEC61850_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"pyiec61850 not available: {e}")
+    PYIEC61850_AVAILABLE = False
 
 class ClientState(Enum):
     """客户端状态"""
@@ -33,32 +40,6 @@ class ClientState(Enum):
     CONNECTED = auto()
     DISCONNECTING = auto()
     ERROR = auto()
-
-
-class MessageType(Enum):
-    """消息类型 - 与服务端保持一致"""
-    GET_SERVER_DIRECTORY = 0x01
-    GET_LOGICAL_DEVICE_DIRECTORY = 0x02
-    GET_LOGICAL_NODE_DIRECTORY = 0x03
-    GET_DATA_VALUES = 0x04
-    SET_DATA_VALUES = 0x05
-    GET_DATA_DEFINITION = 0x06
-    
-    SELECT = 0x10
-    OPERATE = 0x11
-    CANCEL = 0x12
-    
-    ENABLE_REPORTING = 0x20
-    DISABLE_REPORTING = 0x21
-    GET_REPORT = 0x22
-    
-    RESPONSE_OK = 0x80
-    RESPONSE_ERROR = 0x81
-    REPORT_DATA = 0x82
-    
-    HEARTBEAT = 0xF0
-    DISCONNECT = 0xFF
-
 
 @dataclass
 class ClientConfig:
@@ -116,7 +97,7 @@ class DataValue:
 
 class IEC61850Client:
     """
-    IEC61850客户端
+    IEC61850客户端 - 使用pyiec61850库实现真实MMS协议
     
     提供以下功能：
     - 连接/断开IED服务器
@@ -138,19 +119,12 @@ class IEC61850Client:
         
         # 连接信息
         self._connection: Optional[ConnectionInfo] = None
-        self._socket: Optional[socket.socket] = None
+        self._ied_connection = None  # pyiec61850 IedConnection
         self._server_directory: Optional[ServerDirectory] = None
         
         # 线程
-        self._receive_thread: Optional[threading.Thread] = None
         self._polling_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        
-        # 响应队列
-        self._response_queue: Queue = Queue()
-        self._pending_requests: Dict[int, Queue] = {}
-        self._request_id = 0
-        self._request_lock = threading.Lock()
         
         # 订阅
         self._subscriptions: Dict[str, Callable] = {}
@@ -180,6 +154,11 @@ class IEC61850Client:
         Returns:
             是否成功连接
         """
+        if not PYIEC61850_AVAILABLE:
+            self._log("error", "pyiec61850 library not available")
+            self._set_state(ClientState.ERROR)
+            return False
+        
         if self.state == ClientState.CONNECTED:
             self._log("warning", "Already connected")
             return False
@@ -190,34 +169,45 @@ class IEC61850Client:
             self._set_state(ClientState.CONNECTING)
             self._stop_event.clear()
             
-            # 创建socket连接
-            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._socket.settimeout(self.config.timeout_ms / 1000.0)
-            self._socket.connect((host, port))
+            # 创建连接
+            self._ied_connection = iec61850.IedConnection_create()
             
-            # 启动接收线程
-            self._receive_thread = threading.Thread(
-                target=self._receive_loop,
-                name="IEC61850-Client-Recv",
-                daemon=True
+            # 设置超时
+            iec61850.IedConnection_setConnectTimeout(
+                self._ied_connection, 
+                self.config.timeout_ms
             )
-            self._receive_thread.start()
+            iec61850.IedConnection_setRequestTimeout(
+                self._ied_connection, 
+                self.config.timeout_ms
+            )
+            
+            # 连接到服务器
+            error = iec61850.IedConnection_connect(
+                self._ied_connection, 
+                host, 
+                port
+            )
+            
+            if error != iec61850.IED_ERROR_OK:
+                error_str = iec61850.IedClientError_toString(error)
+                raise Exception(f"Connection failed: {error_str}")
+            
+            # 检查连接状态
+            state = iec61850.IedConnection_getState(self._ied_connection)
+            if state != iec61850.IED_STATE_CONNECTED:
+                raise Exception("Connection state is not CONNECTED")
             
             # 获取服务器目录
             self._server_directory = self._get_server_directory()
             
             if self._server_directory:
                 self._set_state(ClientState.CONNECTED)
-                self._log("info", f"Connected to {host}:{port} - IED: {self._server_directory.ied_name}")
+                self._log("info", f"Connected to {host}:{port}")
                 
                 # 启动轮询线程
-                if self.config.enable_reporting:
-                    self._polling_thread = threading.Thread(
-                        target=self._polling_loop,
-                        name="IEC61850-Client-Poll",
-                        daemon=True
-                    )
-                    self._polling_thread.start()
+                if self.config.enable_reporting and self._subscriptions:
+                    self._start_polling()
                 
                 return True
             else:
@@ -242,15 +232,12 @@ class IEC61850Client:
         try:
             self._set_state(ClientState.DISCONNECTING)
             
-            # 发送断开消息
-            if self._socket:
-                try:
-                    disconnect_msg = self._create_message(MessageType.DISCONNECT, b"")
-                    self._socket.sendall(disconnect_msg)
-                except Exception:
-                    pass
-            
             self._stop_event.set()
+            
+            # 等待轮询线程结束
+            if self._polling_thread and self._polling_thread.is_alive():
+                self._polling_thread.join(timeout=2.0)
+            
             self._cleanup()
             
             self._set_state(ClientState.DISCONNECTED)
@@ -276,171 +263,35 @@ class IEC61850Client:
     
     def _cleanup(self):
         """清理资源"""
-        if self._socket:
+        if self._ied_connection:
             try:
-                self._socket.close()
-            except Exception:
-                pass
-            self._socket = None
+                # 关闭连接
+                iec61850.IedConnection_close(self._ied_connection)
+                iec61850.IedConnection_destroy(self._ied_connection)
+            except Exception as e:
+                logger.debug(f"Cleanup error: {e}")
+            self._ied_connection = None
         
         self._server_directory = None
         self._cached_values.clear()
-        self._subscriptions.clear()
     
-    # ========================================================================
-    # 通信
-    # ========================================================================
-    
-    def _receive_loop(self):
-        """接收消息循环"""
-        while not self._stop_event.is_set():
-            try:
-                if not self._socket:
-                    break
-                
-                # 接收消息头
-                header = self._socket.recv(4)
-                if not header:
-                    break
-                
-                if len(header) < 3:
-                    continue
-                
-                msg_type, msg_len = struct.unpack(">BH", header[:3])
-                
-                # 接收消息体
-                data = b""
-                if msg_len > 0:
-                    data = self._socket.recv(msg_len)
-                
-                # 处理消息
-                self._handle_message(msg_type, data)
-                
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if not self._stop_event.is_set():
-                    self._log("error", f"Receive error: {e}")
-                    if self.config.auto_reconnect:
-                        self._handle_disconnect()
-                break
-    
-    def _handle_message(self, msg_type: int, data: bytes):
-        """处理接收到的消息"""
-        if msg_type == MessageType.RESPONSE_OK.value:
-            self._response_queue.put(("ok", data))
-            
-        elif msg_type == MessageType.RESPONSE_ERROR.value:
-            self._response_queue.put(("error", data))
-            
-        elif msg_type == MessageType.REPORT_DATA.value:
-            self._handle_report(data)
-            
-        elif msg_type == MessageType.HEARTBEAT.value:
-            # 响应心跳
-            pass
-    
-    def _handle_report(self, data: bytes):
-        """处理报告数据"""
-        try:
-            report = json.loads(data.decode('utf-8'))
-            
-            # 更新缓存
-            for ref, value_info in report.items():
-                if isinstance(value_info, dict):
-                    self._cached_values[ref] = DataValue(
-                        reference=ref,
-                        value=value_info.get("value"),
-                        quality=value_info.get("quality", 0),
-                        timestamp=datetime.fromisoformat(value_info["timestamp"]) if value_info.get("timestamp") else None,
-                    )
-                    
-                    # 触发回调
-                    for callback in self._data_callbacks:
-                        try:
-                            callback(ref, value_info.get("value"))
-                        except Exception as e:
-                            logger.error(f"Data callback error: {e}")
-            
-            # 报告回调
-            for callback in self._report_callbacks:
-                try:
-                    callback(report)
-                except Exception as e:
-                    logger.error(f"Report callback error: {e}")
-                    
-        except Exception as e:
-            self._log("error", f"Failed to handle report: {e}")
-    
-    def _handle_disconnect(self):
-        """处理意外断开"""
-        self._set_state(ClientState.DISCONNECTED)
+    def _start_polling(self):
+        """启动轮询线程"""
+        if self._polling_thread and self._polling_thread.is_alive():
+            return
         
-        if self.config.auto_reconnect and self._connection:
-            self._log("info", "Attempting to reconnect...")
-            for i in range(self.config.retry_count):
-                time.sleep(self.config.retry_interval_ms / 1000.0)
-                if self.reconnect():
-                    return
-            self._log("error", "Reconnection failed")
-    
-    def _send_request(self, msg_type: MessageType, data: bytes = b"") -> Optional[Dict]:
-        """
-        发送请求并等待响应
-        
-        Args:
-            msg_type: 消息类型
-            data: 消息数据
-            
-        Returns:
-            响应数据字典，失败返回None
-        """
-        if not self._socket or self.state != ClientState.CONNECTED:
-            return None
-        
-        try:
-            # 清空响应队列
-            while not self._response_queue.empty():
-                try:
-                    self._response_queue.get_nowait()
-                except Empty:
-                    break
-            
-            # 发送请求
-            message = self._create_message(msg_type, data)
-            self._socket.sendall(message)
-            
-            # 等待响应
-            try:
-                status, response_data = self._response_queue.get(
-                    timeout=self.config.timeout_ms / 1000.0
-                )
-                
-                if status == "ok":
-                    return json.loads(response_data.decode('utf-8'))
-                else:
-                    error = json.loads(response_data.decode('utf-8'))
-                    self._log("error", f"Request error: {error.get('error', 'Unknown')}")
-                    return None
-                    
-            except Empty:
-                self._log("error", "Request timeout")
-                return None
-                
-        except Exception as e:
-            self._log("error", f"Send request error: {e}")
-            return None
-    
-    def _create_message(self, msg_type: MessageType, data: bytes) -> bytes:
-        """创建消息"""
-        header = struct.pack(">BH", msg_type.value, len(data))
-        return header + data
+        self._polling_thread = threading.Thread(
+            target=self._polling_loop,
+            name="IEC61850-Client-Poll",
+            daemon=True
+        )
+        self._polling_thread.start()
     
     def _polling_loop(self):
         """轮询数据更新"""
         while not self._stop_event.is_set():
             try:
-                if self._subscriptions:
+                if self._subscriptions and self.state == ClientState.CONNECTED:
                     references = list(self._subscriptions.keys())
                     values = self.read_values(references)
                     
@@ -462,17 +313,40 @@ class IEC61850Client:
     
     def _get_server_directory(self) -> Optional[ServerDirectory]:
         """获取服务器目录"""
-        response = self._send_request(MessageType.GET_SERVER_DIRECTORY)
+        if not self._ied_connection:
+            return None
         
-        if response:
+        try:
+            # 获取逻辑设备列表
+            result = iec61850.IedConnection_getLogicalDeviceList(self._ied_connection)
+            
+            if isinstance(result, tuple):
+                device_list, error = result
+            else:
+                device_list = result
+                error = iec61850.IED_ERROR_OK
+            
+            if error != iec61850.IED_ERROR_OK:
+                return None
+            
+            # 遍历逻辑设备
+            logical_devices = []
+            if device_list:
+                device = iec61850.LinkedList_getNext(device_list)
+                while device:
+                    ld_name = iec61850.toCharP(device.data)
+                    logical_devices.append(ld_name)
+                    device = iec61850.LinkedList_getNext(device)
+                iec61850.LinkedList_destroy(device_list)
+            
             return ServerDirectory(
-                ied_name=response.get("ied_name", ""),
-                manufacturer=response.get("manufacturer", ""),
-                model=response.get("model", ""),
-                revision=response.get("revision", ""),
-                logical_devices=response.get("logical_devices", []),
+                ied_name="IED",  # pyiec61850 不直接提供IED名称
+                logical_devices=logical_devices,
             )
-        return None
+            
+        except Exception as e:
+            self._log("error", f"Failed to get server directory: {e}")
+            return None
     
     def get_server_info(self) -> Optional[Dict]:
         """获取服务器信息"""
@@ -493,20 +367,82 @@ class IEC61850Client:
     
     def get_logical_device_directory(self, ld_name: str) -> Optional[Dict]:
         """获取逻辑设备目录"""
-        response = self._send_request(
-            MessageType.GET_LOGICAL_DEVICE_DIRECTORY,
-            ld_name.encode('utf-8')
-        )
-        return response
+        if not self._ied_connection:
+            return None
+        
+        try:
+            result = iec61850.IedConnection_getLogicalDeviceDirectory(
+                self._ied_connection, ld_name
+            )
+            
+            if isinstance(result, tuple):
+                ln_list, error = result
+            else:
+                ln_list = result
+                error = iec61850.IED_ERROR_OK
+            
+            if error != iec61850.IED_ERROR_OK:
+                return None
+            
+            logical_nodes = []
+            if ln_list:
+                ln = iec61850.LinkedList_getNext(ln_list)
+                while ln:
+                    ln_name = iec61850.toCharP(ln.data)
+                    logical_nodes.append(ln_name)
+                    ln = iec61850.LinkedList_getNext(ln)
+                iec61850.LinkedList_destroy(ln_list)
+            
+            return {
+                "name": ld_name,
+                "logical_nodes": logical_nodes,
+            }
+            
+        except Exception as e:
+            self._log("error", f"Failed to get LD directory: {e}")
+            return None
     
     def get_logical_node_directory(self, ld_name: str, ln_name: str) -> Optional[Dict]:
         """获取逻辑节点目录"""
-        path = f"{ld_name}/{ln_name}"
-        response = self._send_request(
-            MessageType.GET_LOGICAL_NODE_DIRECTORY,
-            path.encode('utf-8')
-        )
-        return response
+        if not self._ied_connection:
+            return None
+        
+        try:
+            ln_ref = f"{ld_name}/{ln_name}"
+            
+            # 获取数据对象
+            result = iec61850.IedConnection_getLogicalNodeDirectory(
+                self._ied_connection, 
+                ln_ref,
+                iec61850.ACSI_CLASS_DATA_OBJECT
+            )
+            
+            if isinstance(result, tuple):
+                do_list, error = result
+            else:
+                do_list = result
+                error = iec61850.IED_ERROR_OK
+            
+            if error != iec61850.IED_ERROR_OK:
+                return None
+            
+            data_objects = []
+            if do_list:
+                do = iec61850.LinkedList_getNext(do_list)
+                while do:
+                    do_name = iec61850.toCharP(do.data)
+                    data_objects.append(do_name)
+                    do = iec61850.LinkedList_getNext(do)
+                iec61850.LinkedList_destroy(do_list)
+            
+            return {
+                "name": ln_name,
+                "data_objects": data_objects,
+            }
+            
+        except Exception as e:
+            self._log("error", f"Failed to get LN directory: {e}")
+            return None
     
     def browse_data_model(self) -> Dict:
         """
@@ -527,7 +463,6 @@ class IEC61850Client:
             ld_dir = self.get_logical_device_directory(ld_name)
             if ld_dir:
                 model["logical_devices"][ld_name] = {
-                    "description": ld_dir.get("description", ""),
                     "logical_nodes": {}
                 }
                 
@@ -547,7 +482,7 @@ class IEC61850Client:
         读取单个数据值
         
         Args:
-            reference: 数据引用路径
+            reference: 数据引用路径 (格式: LD/LN.DO.DA)
             
         Returns:
             数据值对象
@@ -565,32 +500,108 @@ class IEC61850Client:
         Returns:
             引用到数据值的映射
         """
-        response = self._send_request(
-            MessageType.GET_DATA_VALUES,
-            json.dumps(references).encode('utf-8')
-        )
+        if not self._ied_connection or self.state != ClientState.CONNECTED:
+            return {}
         
         result = {}
-        if response:
-            for ref, value_info in response.items():
-                if isinstance(value_info, dict):
-                    if "error" in value_info:
-                        result[ref] = DataValue(
-                            reference=ref,
-                            value=None,
-                            error=value_info["error"]
-                        )
-                    else:
-                        dv = DataValue(
-                            reference=ref,
-                            value=value_info.get("value"),
-                            quality=value_info.get("quality", 0),
-                            timestamp=datetime.fromisoformat(value_info["timestamp"]) if value_info.get("timestamp") else None,
-                        )
-                        result[ref] = dv
-                        self._cached_values[ref] = dv
+        for ref in references:
+            try:
+                dv = self._read_single_value(ref)
+                if dv:
+                    result[ref] = dv
+                    self._cached_values[ref] = dv
+            except Exception as e:
+                result[ref] = DataValue(reference=ref, value=None, error=str(e))
         
         return result
+    
+    def _read_single_value(self, reference: str) -> Optional[DataValue]:
+        """读取单个值"""
+        if not self._ied_connection:
+            return None
+        
+        try:
+            # 尝试不同的功能约束
+            fcs = [
+                iec61850.IEC61850_FC_ST,
+                iec61850.IEC61850_FC_MX,
+                iec61850.IEC61850_FC_SP,
+                iec61850.IEC61850_FC_CF,
+            ]
+            
+            for fc in fcs:
+                try:
+                    result = iec61850.IedConnection_readObject(
+                        self._ied_connection,
+                        reference,
+                        fc
+                    )
+                    
+                    if isinstance(result, tuple):
+                        mms_value, error = result
+                    else:
+                        mms_value = result
+                        error = iec61850.IED_ERROR_OK
+                    
+                    if error == iec61850.IED_ERROR_OK and mms_value:
+                        value = self._mms_value_to_python(mms_value)
+                        iec61850.MmsValue_delete(mms_value)
+                        
+                        return DataValue(
+                            reference=reference,
+                            value=value,
+                            timestamp=datetime.now(),
+                        )
+                except:
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            self._log("error", f"Failed to read {reference}: {e}")
+            return None
+    
+    def _mms_value_to_python(self, mms_value) -> Any:
+        """将MMS值转换为Python值"""
+        try:
+            mms_type = iec61850.MmsValue_getType(mms_value)
+            
+            if mms_type == iec61850.MMS_BOOLEAN:
+                return iec61850.MmsValue_getBoolean(mms_value)
+            elif mms_type == iec61850.MMS_INTEGER:
+                return iec61850.MmsValue_toInt32(mms_value)
+            elif mms_type == iec61850.MMS_UNSIGNED:
+                return iec61850.MmsValue_toUint32(mms_value)
+            elif mms_type == iec61850.MMS_FLOAT:
+                return iec61850.MmsValue_toFloat(mms_value)
+            elif mms_type == iec61850.MMS_VISIBLE_STRING:
+                return iec61850.MmsValue_toString(mms_value)
+            elif mms_type == iec61850.MMS_BIT_STRING:
+                return iec61850.MmsValue_getBitStringAsInteger(mms_value)
+            elif mms_type == iec61850.MMS_UTC_TIME:
+                ms_time = iec61850.MmsValue_getUtcTimeInMs(mms_value)
+                return datetime.fromtimestamp(ms_time / 1000.0)
+            elif mms_type == iec61850.MMS_STRUCTURE:
+                # 递归处理结构体
+                size = iec61850.MmsValue_getArraySize(mms_value)
+                result = {}
+                for i in range(size):
+                    element = iec61850.MmsValue_getElement(mms_value, i)
+                    result[f"element_{i}"] = self._mms_value_to_python(element)
+                return result
+            elif mms_type == iec61850.MMS_ARRAY:
+                size = iec61850.MmsValue_getArraySize(mms_value)
+                result = []
+                for i in range(size):
+                    element = iec61850.MmsValue_getElement(mms_value, i)
+                    result.append(self._mms_value_to_python(element))
+                return result
+            else:
+                return None
+                
+        except Exception as e:
+            logger.debug(f"MMS value conversion error: {e}")
+            return None
     
     def write_value(self, reference: str, value: Any) -> bool:
         """
@@ -601,7 +612,7 @@ class IEC61850Client:
             value: 要写入的值
             
         Returns:
-            是否成功
+            是否成功写入
         """
         return self.write_values({reference: value}).get(reference, False)
     
@@ -615,128 +626,228 @@ class IEC61850Client:
         Returns:
             引用到成功状态的映射
         """
-        response = self._send_request(
-            MessageType.SET_DATA_VALUES,
-            json.dumps(updates).encode('utf-8')
-        )
+        if not self._ied_connection or self.state != ClientState.CONNECTED:
+            return {ref: False for ref in updates}
         
         result = {}
-        if response:
-            for ref, status in response.items():
-                result[ref] = status == "OK"
+        for ref, value in updates.items():
+            try:
+                success = self._write_single_value(ref, value)
+                result[ref] = success
+            except Exception as e:
+                self._log("error", f"Failed to write {ref}: {e}")
+                result[ref] = False
         
         return result
+    
+    def _write_single_value(self, reference: str, value: Any) -> bool:
+        """写入单个值"""
+        if not self._ied_connection:
+            return False
+        
+        try:
+            # 尝试不同的功能约束
+            fcs = [
+                iec61850.IEC61850_FC_SP,  # 设定点优先
+                iec61850.IEC61850_FC_CF,
+                iec61850.IEC61850_FC_ST,
+            ]
+            
+            for fc in fcs:
+                try:
+                    if isinstance(value, bool):
+                        error = iec61850.IedConnection_writeBooleanValue(
+                            self._ied_connection, reference, fc, value
+                        )
+                    elif isinstance(value, int):
+                        error = iec61850.IedConnection_writeInt32Value(
+                            self._ied_connection, reference, fc, value
+                        )
+                    elif isinstance(value, float):
+                        error = iec61850.IedConnection_writeFloatValue(
+                            self._ied_connection, reference, fc, value
+                        )
+                    elif isinstance(value, str):
+                        error = iec61850.IedConnection_writeVisibleStringValue(
+                            self._ied_connection, reference, fc, value
+                        )
+                    else:
+                        continue
+                    
+                    if error == iec61850.IED_ERROR_OK:
+                        return True
+                except:
+                    continue
+            
+            return False
+            
+        except Exception as e:
+            self._log("error", f"Write error: {e}")
+            return False
     
     # ========================================================================
     # 控制操作
     # ========================================================================
     
-    def operate(self, reference: str, value: Any) -> bool:
+    def operate(self, reference: str, value: Any, **kwargs) -> bool:
         """
         执行控制操作
         
         Args:
-            reference: 控制点引用路径
+            reference: 控制点引用
             value: 控制值
+            **kwargs: 其他参数
             
         Returns:
             是否成功
         """
-        control_data = {
-            "reference": reference,
-            "value": value,
-            "timestamp": datetime.now().isoformat(),
-        }
+        if not self._ied_connection or self.state != ClientState.CONNECTED:
+            return False
         
-        response = self._send_request(
-            MessageType.OPERATE,
-            json.dumps(control_data).encode('utf-8')
-        )
-        
-        if response:
-            return response.get("success", False)
-        return False
+        try:
+            # 创建控制对象
+            control = iec61850.ControlObjectClient_create(
+                reference, 
+                self._ied_connection
+            )
+            
+            if not control:
+                self._log("error", f"Failed to create control object for {reference}")
+                return False
+            
+            try:
+                # 创建控制值
+                if isinstance(value, bool):
+                    mms_value = iec61850.MmsValue_newBoolean(value)
+                elif isinstance(value, int):
+                    mms_value = iec61850.MmsValue_newIntegerFromInt32(value)
+                elif isinstance(value, float):
+                    mms_value = iec61850.MmsValue_newFloat(value)
+                else:
+                    self._log("error", f"Unsupported control value type: {type(value)}")
+                    return False
+                
+                # 执行操作
+                success = iec61850.ControlObjectClient_operate(
+                    control, mms_value, 0
+                )
+                
+                iec61850.MmsValue_delete(mms_value)
+                
+                return success
+                
+            finally:
+                iec61850.ControlObjectClient_destroy(control)
+                
+        except Exception as e:
+            self._log("error", f"Control operation failed: {e}")
+            return False
     
-    def select_before_operate(self, reference: str) -> bool:
+    def select(self, reference: str) -> bool:
         """
-        SBO选择操作
+        选择控制点 (SBO模式)
         
         Args:
-            reference: 控制点引用路径
+            reference: 控制点引用
             
         Returns:
             是否成功选择
         """
-        select_data = {
-            "reference": reference,
-            "timestamp": datetime.now().isoformat(),
-        }
+        if not self._ied_connection or self.state != ClientState.CONNECTED:
+            return False
         
-        response = self._send_request(
-            MessageType.SELECT,
-            json.dumps(select_data).encode('utf-8')
-        )
-        
-        if response:
-            return response.get("success", False)
-        return False
+        try:
+            control = iec61850.ControlObjectClient_create(
+                reference, 
+                self._ied_connection
+            )
+            
+            if not control:
+                return False
+            
+            try:
+                success = iec61850.ControlObjectClient_select(control)
+                return success
+            finally:
+                iec61850.ControlObjectClient_destroy(control)
+                
+        except Exception as e:
+            self._log("error", f"Select failed: {e}")
+            return False
     
     def cancel(self, reference: str) -> bool:
         """
         取消控制操作
         
         Args:
-            reference: 控制点引用路径
+            reference: 控制点引用
             
         Returns:
             是否成功取消
         """
-        cancel_data = {"reference": reference}
+        if not self._ied_connection or self.state != ClientState.CONNECTED:
+            return False
         
-        response = self._send_request(
-            MessageType.CANCEL,
-            json.dumps(cancel_data).encode('utf-8')
-        )
-        
-        if response:
-            return response.get("success", False)
-        return False
+        try:
+            control = iec61850.ControlObjectClient_create(
+                reference, 
+                self._ied_connection
+            )
+            
+            if not control:
+                return False
+            
+            try:
+                success = iec61850.ControlObjectClient_cancel(control)
+                return success
+            finally:
+                iec61850.ControlObjectClient_destroy(control)
+                
+        except Exception as e:
+            self._log("error", f"Cancel failed: {e}")
+            return False
     
     # ========================================================================
-    # 订阅和报告
+    # 订阅
     # ========================================================================
     
-    def subscribe(self, reference: str, callback: Callable[[str, Any], None]):
+    def subscribe(self, reference: str, callback: Callable[[str, Any], None]) -> bool:
         """
         订阅数据变化
         
         Args:
-            reference: 数据引用路径
-            callback: 回调函数 (reference, value)
+            reference: 数据引用
+            callback: 变化回调函数
+            
+        Returns:
+            是否成功订阅
         """
         self._subscriptions[reference] = callback
         
-        # 通知服务器
+        # 如果已连接，启动轮询
         if self.state == ClientState.CONNECTED:
-            self._send_request(
-                MessageType.ENABLE_REPORTING,
-                json.dumps({"references": [reference]}).encode('utf-8')
-            )
-    
-    def unsubscribe(self, reference: str):
-        """取消订阅"""
-        self._subscriptions.pop(reference, None)
-    
-    def subscribe_all(self, references: List[str], callback: Callable[[str, Any], None]):
-        """批量订阅"""
-        for ref in references:
-            self._subscriptions[ref] = callback
+            self._start_polling()
         
-        if self.state == ClientState.CONNECTED:
-            self._send_request(
-                MessageType.ENABLE_REPORTING,
-                json.dumps({"references": references}).encode('utf-8')
-            )
+        return True
+    
+    def unsubscribe(self, reference: str) -> bool:
+        """
+        取消订阅
+        
+        Args:
+            reference: 数据引用
+            
+        Returns:
+            是否成功取消
+        """
+        if reference in self._subscriptions:
+            del self._subscriptions[reference]
+            return True
+        return False
+    
+    def get_cached_value(self, reference: str) -> Optional[DataValue]:
+        """获取缓存的值"""
+        return self._cached_values.get(reference)
     
     # ========================================================================
     # 回调和事件
@@ -760,6 +871,10 @@ class IEC61850Client:
             except Exception:
                 pass
     
+    # ========================================================================
+    # 公共API
+    # ========================================================================
+    
     def on_state_change(self, callback: Callable[[ClientState], None]):
         """注册状态变化回调"""
         self._state_callbacks.append(callback)
@@ -776,14 +891,6 @@ class IEC61850Client:
         """注册日志回调"""
         self._log_callbacks.append(callback)
     
-    # ========================================================================
-    # 状态查询
-    # ========================================================================
-    
-    def is_connected(self) -> bool:
-        """是否已连接"""
-        return self.state == ClientState.CONNECTED
-    
     def get_connection_info(self) -> Optional[Dict]:
         """获取连接信息"""
         if self._connection:
@@ -795,10 +902,12 @@ class IEC61850Client:
             }
         return None
     
-    def get_cached_value(self, reference: str) -> Optional[DataValue]:
-        """获取缓存的数据值"""
-        return self._cached_values.get(reference)
-    
-    def get_all_cached_values(self) -> Dict[str, DataValue]:
-        """获取所有缓存的数据值"""
-        return self._cached_values.copy()
+    def is_connected(self) -> bool:
+        """检查是否已连接"""
+        if self._ied_connection:
+            try:
+                state = iec61850.IedConnection_getState(self._ied_connection)
+                return state == iec61850.IED_STATE_CONNECTED
+            except:
+                pass
+        return False

@@ -14,7 +14,7 @@ wheels/
 .idea/
 
 # dependency directories
-deps/
+lib/
 
 # running logs
 logs/

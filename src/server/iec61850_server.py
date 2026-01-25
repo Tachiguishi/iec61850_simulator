@@ -2,33 +2,42 @@
 IEC61850 Server Implementation
 ==============================
 
-实现IEC61850服务端功能，包括：
-- MMS协议服务器
+实现IEC61850服务端功能，使用libiec61850的Python绑定(pyiec61850)：
+- 真实MMS协议服务器
 - 数据点管理
 - 客户端连接管理
 - 报告和GOOSE发布
 
-注意：这是一个仿真实现，使用TCP socket模拟MMS协议。
-完整的MMS实现需要使用libiec61850库。
+使用pyiec61850库实现标准MMS协议。
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-import socket
-import struct
+import os
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
-from queue import Queue
 
 from loguru import logger
 
-import sys
+# 添加pyiec61850库路径
+# PYIEC61850_PATH = os.path.join(
+#     os.path.dirname(__file__), 
+#     "..", "..", "deps", "libiec61850", "build", "pyiec61850"
+# )
+# sys.path.insert(0, PYIEC61850_PATH)
+
+try:
+    import pyiec61850 as iec61850
+    PYIEC61850_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"pyiec61850 not available: {e}")
+    PYIEC61850_AVAILABLE = False
+
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -77,7 +86,6 @@ class ClientConnection:
     """客户端连接信息"""
     id: str
     address: Tuple[str, int]
-    socket: socket.socket
     connected_at: datetime = field(default_factory=datetime.now)
     last_activity: datetime = field(default_factory=datetime.now)
     subscriptions: Set[str] = field(default_factory=set)
@@ -86,39 +94,9 @@ class ClientConnection:
         return hash(self.id)
 
 
-class MessageType(Enum):
-    """消息类型"""
-    # 请求类型
-    GET_SERVER_DIRECTORY = 0x01
-    GET_LOGICAL_DEVICE_DIRECTORY = 0x02
-    GET_LOGICAL_NODE_DIRECTORY = 0x03
-    GET_DATA_VALUES = 0x04
-    SET_DATA_VALUES = 0x05
-    GET_DATA_DEFINITION = 0x06
-    
-    # 控制操作
-    SELECT = 0x10
-    OPERATE = 0x11
-    CANCEL = 0x12
-    
-    # 报告
-    ENABLE_REPORTING = 0x20
-    DISABLE_REPORTING = 0x21
-    GET_REPORT = 0x22
-    
-    # 响应
-    RESPONSE_OK = 0x80
-    RESPONSE_ERROR = 0x81
-    REPORT_DATA = 0x82
-    
-    # 系统
-    HEARTBEAT = 0xF0
-    DISCONNECT = 0xFF
-
-
 class IEC61850Server:
     """
-    IEC61850服务端仿真器
+    IEC61850服务端 - 使用pyiec61850库实现真实MMS协议
     
     提供以下功能：
     - 启动/停止MMS服务
@@ -142,13 +120,16 @@ class IEC61850Server:
         self.data_model_manager = DataModelManager()
         self.ied: Optional[IED] = None
         
-        # 网络
-        self._server_socket: Optional[socket.socket] = None
+        # pyiec61850 对象
+        self._ied_model = None
+        self._ied_server = None
+        self._model_nodes: Dict[str, Any] = {}  # 存储数据属性节点引用
+        
+        # 客户端跟踪
         self._clients: Dict[str, ClientConnection] = {}
         self._client_lock = threading.Lock()
         
         # 线程
-        self._accept_thread: Optional[threading.Thread] = None
         self._update_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         
@@ -157,9 +138,6 @@ class IEC61850Server:
         self._connection_callbacks: List[Callable[[str, bool], None]] = []
         self._data_callbacks: List[Callable[[str, Any, Any], None]] = []
         self._log_callbacks: List[Callable[[str, str], None]] = []
-        
-        # 消息队列
-        self._message_queue: Queue = Queue()
         
     # ========================================================================
     # 生命周期管理
@@ -172,6 +150,11 @@ class IEC61850Server:
         Returns:
             是否成功启动
         """
+        if not PYIEC61850_AVAILABLE:
+            self._log("error", "pyiec61850 library not available")
+            self._set_state(ServerState.ERROR)
+            return False
+        
         if self.state == ServerState.RUNNING:
             self._log("warning", "Server is already running")
             return False
@@ -184,20 +167,33 @@ class IEC61850Server:
             self._set_state(ServerState.STARTING)
             self._stop_event.clear()
             
-            # 创建服务器socket
-            self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._server_socket.bind((self.config.ip_address, self.config.port))
-            self._server_socket.listen(self.config.max_connections)
-            self._server_socket.settimeout(1.0)
+            # 创建IED模型
+            self._create_ied_model()
             
-            # 启动接受连接线程
-            self._accept_thread = threading.Thread(
-                target=self._accept_connections,
-                name="IEC61850-Accept",
-                daemon=True
+            # 创建服务器配置
+            server_config = iec61850.IedServerConfig_create()
+            iec61850.IedServerConfig_setMaxMmsConnections(server_config, self.config.max_connections)
+            iec61850.IedServerConfig_setEdition(server_config, iec61850.IEC_61850_EDITION_2)
+            
+            # 创建并启动服务器
+            self._ied_server = iec61850.IedServer_createWithConfig(
+                self._ied_model, None, server_config
             )
-            self._accept_thread.start()
+            
+            # 设置服务器标识
+            if self.ied:
+                iec61850.IedServer_setServerIdentity(
+                    self._ied_server,
+                    self.ied.manufacturer or "IEC61850 Simulator",
+                    self.ied.model or "Virtual IED",
+                    self.ied.revision or "1.0.0"
+                )
+            
+            # 启动服务器
+            iec61850.IedServer_start(self._ied_server, self.config.port)
+            
+            if not iec61850.IedServer_isRunning(self._ied_server):
+                raise Exception("Failed to start IED server")
             
             # 启动数据更新线程
             self._update_thread = threading.Thread(
@@ -207,12 +203,16 @@ class IEC61850Server:
             )
             self._update_thread.start()
             
+            # 清理配置对象
+            iec61850.IedServerConfig_destroy(server_config)
+            
             self._set_state(ServerState.RUNNING)
-            self._log("info", f"Server started on {self.config.ip_address}:{self.config.port}")
+            self._log("info", f"Server started on port {self.config.port}")
             return True
             
         except Exception as e:
             self._log("error", f"Failed to start server: {e}")
+            self._cleanup()
             self._set_state(ServerState.ERROR)
             return False
     
@@ -230,22 +230,12 @@ class IEC61850Server:
             self._set_state(ServerState.STOPPING)
             self._stop_event.set()
             
-            # 断开所有客户端
-            with self._client_lock:
-                for client in list(self._clients.values()):
-                    self._disconnect_client(client.id)
-            
-            # 关闭服务器socket
-            if self._server_socket:
-                self._server_socket.close()
-                self._server_socket = None
-            
-            # 等待线程结束
-            if self._accept_thread and self._accept_thread.is_alive():
-                self._accept_thread.join(timeout=2.0)
-            
+            # 等待更新线程结束
             if self._update_thread and self._update_thread.is_alive():
                 self._update_thread.join(timeout=2.0)
+            
+            # 停止并销毁服务器
+            self._cleanup()
             
             self._set_state(ServerState.STOPPED)
             self._log("info", "Server stopped")
@@ -256,11 +246,172 @@ class IEC61850Server:
             self._set_state(ServerState.ERROR)
             return False
     
+    def _cleanup(self):
+        """清理资源"""
+        if self._ied_server:
+            try:
+                iec61850.IedServer_stop(self._ied_server)
+                iec61850.IedServer_destroy(self._ied_server)
+            except Exception as e:
+                logger.error(f"Error destroying server: {e}")
+            self._ied_server = None
+        
+        if self._ied_model:
+            try:
+                iec61850.IedModel_destroy(self._ied_model)
+            except Exception as e:
+                logger.error(f"Error destroying model: {e}")
+            self._ied_model = None
+        
+        self._model_nodes.clear()
+        self._clients.clear()
+    
     def restart(self) -> bool:
         """重启服务器"""
         self.stop()
         time.sleep(0.5)
         return self.start()
+    
+    # ========================================================================
+    # IED模型创建
+    # ========================================================================
+    
+    def _create_ied_model(self):
+        """从Python数据模型创建pyiec61850 IED模型"""
+        if not self.ied:
+            raise Exception("No IED data model configured")
+        
+        # 创建IED模型
+        self._ied_model = iec61850.IedModel_create(self.ied.name)
+        
+        # 创建逻辑设备
+        for ld_name, ld in self.ied.logical_devices.items():
+            self._create_logical_device(ld)
+    
+    def _create_logical_device(self, ld: LogicalDevice):
+        """创建逻辑设备"""
+        # 创建LD
+        ld_node = iec61850.LogicalDevice_create(ld.name, self._ied_model)
+        
+        # 创建逻辑节点
+        for ln_name, ln in ld.logical_nodes.items():
+            self._create_logical_node(ln, ld_node, ld.name)
+    
+    def _create_logical_node(self, ln: LogicalNode, ld_node, ld_name: str):
+        """创建逻辑节点"""
+        ln_node = iec61850.LogicalNode_create(ln.name, ld_node)
+        
+        # 创建数据对象
+        for do_name, do in ln.data_objects.items():
+            self._create_data_object(do, iec61850.toModelNode(ln_node), ld_name, ln.name)
+    
+    def _create_data_object(self, do: DataObject, parent_node, ld_name: str, ln_name: str):
+        """创建数据对象"""
+        do_node = iec61850.DataObject_create(do.name, parent_node, 0)
+        
+        # 创建数据属性
+        for da_name, da in do.attributes.items():
+            self._create_data_attribute(da, iec61850.toModelNode(do_node), ld_name, ln_name, do.name)
+    
+    def _create_data_attribute(self, da: DataAttribute, parent_node, ld_name: str, ln_name: str, do_name: str):
+        """创建数据属性"""
+        # 映射数据类型
+        da_type = self._map_data_type(da.data_type)
+        
+        # 映射功能约束
+        fc = self._map_fc(da.fc)
+        
+        # 触发选项
+        trigger_options = 0
+        if da.data_type != DataType.QUALITY:
+            trigger_options = iec61850.TRG_OPT_DATA_CHANGED | iec61850.TRG_OPT_DATA_UPDATE
+        
+        # 创建属性
+        da_node = iec61850.DataAttribute_create(
+            da.name, 
+            parent_node, 
+            da_type, 
+            fc, 
+            trigger_options, 
+            0,  # 非数组
+            None  # 无短地址
+        )
+        
+        # 存储节点引用用于后续值更新
+        ref = f"{ld_name}/{ln_name}.{do_name}.{da.name}"
+        self._model_nodes[ref] = da_node
+        
+        # 设置初始值
+        if da.value is not None:
+            self._set_initial_value(da_node, da.value, da_type)
+    
+    def _map_data_type(self, data_type: DataType) -> int:
+        """映射数据类型到pyiec61850类型"""
+        type_map = {
+            DataType.BOOLEAN: iec61850.IEC61850_BOOLEAN,
+            DataType.INT8: iec61850.IEC61850_INT8,
+            DataType.INT16: iec61850.IEC61850_INT16,
+            DataType.INT32: iec61850.IEC61850_INT32,
+            DataType.INT64: iec61850.IEC61850_INT64,
+            DataType.INT8U: iec61850.IEC61850_INT8U,
+            DataType.INT16U: iec61850.IEC61850_INT16U,
+            DataType.INT32U: iec61850.IEC61850_INT32U,
+            DataType.FLOAT32: iec61850.IEC61850_FLOAT32,
+            DataType.FLOAT64: iec61850.IEC61850_FLOAT64,
+            DataType.VISIBLE_STRING_64: iec61850.IEC61850_VISIBLE_STRING_64,
+            DataType.VISIBLE_STRING_255: iec61850.IEC61850_VISIBLE_STRING_255,
+            DataType.UNICODE_STRING_255: iec61850.IEC61850_UNICODE_STRING_255,
+            DataType.TIMESTAMP: iec61850.IEC61850_TIMESTAMP,
+            DataType.QUALITY: iec61850.IEC61850_QUALITY,
+            DataType.ENUM: iec61850.IEC61850_ENUMERATED,
+        }
+        return type_map.get(data_type, iec61850.IEC61850_INT32)
+    
+    def _map_fc(self, fc: FunctionalConstraint) -> int:
+        """映射功能约束到pyiec61850 FC"""
+        fc_map = {
+            FunctionalConstraint.ST: iec61850.IEC61850_FC_ST,
+            FunctionalConstraint.MX: iec61850.IEC61850_FC_MX,
+            FunctionalConstraint.SP: iec61850.IEC61850_FC_SP,
+            FunctionalConstraint.SV: iec61850.IEC61850_FC_SV,
+            FunctionalConstraint.CF: iec61850.IEC61850_FC_CF,
+            FunctionalConstraint.DC: iec61850.IEC61850_FC_DC,
+            FunctionalConstraint.SG: iec61850.IEC61850_FC_SG,
+            FunctionalConstraint.SE: iec61850.IEC61850_FC_SE,
+            FunctionalConstraint.SR: iec61850.IEC61850_FC_SR,
+            FunctionalConstraint.OR: iec61850.IEC61850_FC_OR,
+            FunctionalConstraint.BL: iec61850.IEC61850_FC_BL,
+            FunctionalConstraint.EX: iec61850.IEC61850_FC_EX,
+            FunctionalConstraint.CO: iec61850.IEC61850_FC_CO,
+        }
+        return fc_map.get(fc, iec61850.IEC61850_FC_ST)
+    
+    def _set_initial_value(self, da_node, value: Any, da_type: int):
+        """设置数据属性的初始值"""
+        try:
+            mms_value = da_node.mmsValue
+            if mms_value is None:
+                return
+            
+            if da_type == iec61850.IEC61850_BOOLEAN:
+                iec61850.MmsValue_setBoolean(mms_value, bool(value))
+            elif da_type in [iec61850.IEC61850_INT8, iec61850.IEC61850_INT16, 
+                            iec61850.IEC61850_INT32]:
+                iec61850.MmsValue_setInt32(mms_value, int(value))
+            elif da_type == iec61850.IEC61850_INT64:
+                iec61850.MmsValue_setInt64(mms_value, int(value))
+            elif da_type in [iec61850.IEC61850_INT8U, iec61850.IEC61850_INT16U,
+                            iec61850.IEC61850_INT32U]:
+                iec61850.MmsValue_setUint32(mms_value, int(value))
+            elif da_type == iec61850.IEC61850_FLOAT32:
+                iec61850.MmsValue_setFloat(mms_value, float(value))
+            elif da_type == iec61850.IEC61850_FLOAT64:
+                iec61850.MmsValue_setDouble(mms_value, float(value))
+            elif da_type in [iec61850.IEC61850_VISIBLE_STRING_64, 
+                            iec61850.IEC61850_VISIBLE_STRING_255]:
+                iec61850.MmsValue_setVisibleString(mms_value, str(value))
+        except Exception as e:
+            logger.debug(f"Could not set initial value: {e}")
     
     # ========================================================================
     # IED管理
@@ -290,335 +441,77 @@ class IEC61850Server:
     
     def set_data_value(self, reference: str, value: Any) -> bool:
         """设置数据点值"""
-        if not self.ied:
+        if not self.ied or not self._ied_server:
             return False
         
         da = self.ied.get_data_attribute(reference)
         if da:
             old_value = da.value
             if da.set_value(value):
+                # 更新pyiec61850服务器中的值
+                self._update_server_value(reference, value)
                 self._notify_data_change(reference, old_value, value)
                 return True
         return False
     
-    # ========================================================================
-    # 网络处理
-    # ========================================================================
-    
-    def _accept_connections(self):
-        """接受客户端连接的线程"""
-        while not self._stop_event.is_set():
-            try:
-                if self._server_socket:
-                    try:
-                        client_socket, address = self._server_socket.accept()
-                        self._handle_new_connection(client_socket, address)
-                    except socket.timeout:
-                        continue
-            except Exception as e:
-                if not self._stop_event.is_set():
-                    self._log("error", f"Accept error: {e}")
-    
-    def _handle_new_connection(self, client_socket: socket.socket, address: Tuple[str, int]):
-        """处理新连接"""
-        client_id = f"{address[0]}:{address[1]}"
+    def _update_server_value(self, reference: str, value: Any):
+        """更新pyiec61850服务器中的数据值"""
+        if not self._ied_server:
+            return
         
-        with self._client_lock:
-            if len(self._clients) >= self.config.max_connections:
-                self._log("warning", f"Max connections reached, rejecting {client_id}")
-                client_socket.close()
-                return
-            
-            client = ClientConnection(
-                id=client_id,
-                address=address,
-                socket=client_socket,
-            )
-            self._clients[client_id] = client
+        # 查找数据属性节点
+        da_node = self._model_nodes.get(reference)
+        if da_node is None:
+            return
         
-        self._log("info", f"Client connected: {client_id}")
-        self._notify_connection_change(client_id, True)
-        
-        # 启动客户端处理线程
-        thread = threading.Thread(
-            target=self._handle_client,
-            args=(client,),
-            name=f"IEC61850-Client-{client_id}",
-            daemon=True
-        )
-        thread.start()
-    
-    def _handle_client(self, client: ClientConnection):
-        """处理客户端通信"""
         try:
-            client.socket.settimeout(30.0)
+            # 锁定数据模型以进行更新
+            iec61850.IedServer_lockDataModel(self._ied_server)
             
-            while not self._stop_event.is_set():
-                try:
-                    # 接收消息头
-                    header = client.socket.recv(4)
-                    if not header:
-                        break
-                    
-                    if len(header) < 4:
-                        continue
-                    
-                    msg_type, msg_len = struct.unpack(">BH", header[:3])
-                    
-                    # 接收消息体
-                    if msg_len > 0:
-                        data = client.socket.recv(msg_len)
-                    else:
-                        data = b""
-                    
-                    # 处理消息
-                    response = self._process_message(client, msg_type, data)
-                    
-                    # 发送响应
-                    if response:
-                        client.socket.sendall(response)
-                    
-                    client.last_activity = datetime.now()
-                    
-                except socket.timeout:
-                    # 发送心跳
-                    self._send_heartbeat(client)
-                except Exception as e:
-                    self._log("error", f"Client {client.id} error: {e}")
-                    break
-                    
-        finally:
-            self._disconnect_client(client.id)
-    
-    def _process_message(self, client: ClientConnection, msg_type: int, data: bytes) -> Optional[bytes]:
-        """处理客户端消息"""
-        try:
-            if msg_type == MessageType.GET_SERVER_DIRECTORY.value:
-                return self._handle_get_server_directory()
+            # 根据类型更新值
+            da_type = iec61850.DataAttribute_getType(da_node)
             
-            elif msg_type == MessageType.GET_LOGICAL_DEVICE_DIRECTORY.value:
-                ld_name = data.decode('utf-8') if data else ""
-                return self._handle_get_ld_directory(ld_name)
+            if da_type == iec61850.IEC61850_BOOLEAN:
+                iec61850.IedServer_updateBooleanAttributeValue(
+                    self._ied_server, da_node, bool(value)
+                )
+            elif da_type in [iec61850.IEC61850_INT8, iec61850.IEC61850_INT16, 
+                            iec61850.IEC61850_INT32]:
+                iec61850.IedServer_updateInt32AttributeValue(
+                    self._ied_server, da_node, int(value)
+                )
+            elif da_type == iec61850.IEC61850_INT64:
+                iec61850.IedServer_updateInt64AttributeValue(
+                    self._ied_server, da_node, int(value)
+                )
+            elif da_type in [iec61850.IEC61850_INT8U, iec61850.IEC61850_INT16U,
+                            iec61850.IEC61850_INT32U]:
+                iec61850.IedServer_updateUnsignedAttributeValue(
+                    self._ied_server, da_node, int(value)
+                )
+            elif da_type == iec61850.IEC61850_FLOAT32:
+                iec61850.IedServer_updateFloatAttributeValue(
+                    self._ied_server, da_node, float(value)
+                )
+            elif da_type == iec61850.IEC61850_FLOAT64:
+                iec61850.IedServer_updateFloatAttributeValue(
+                    self._ied_server, da_node, float(value)
+                )
+            elif da_type in [iec61850.IEC61850_VISIBLE_STRING_64, 
+                            iec61850.IEC61850_VISIBLE_STRING_255]:
+                iec61850.IedServer_updateVisibleStringAttributeValue(
+                    self._ied_server, da_node, str(value)
+                )
             
-            elif msg_type == MessageType.GET_LOGICAL_NODE_DIRECTORY.value:
-                path = data.decode('utf-8') if data else ""
-                return self._handle_get_ln_directory(path)
+            # 解锁数据模型
+            iec61850.IedServer_unlockDataModel(self._ied_server)
             
-            elif msg_type == MessageType.GET_DATA_VALUES.value:
-                references = json.loads(data.decode('utf-8')) if data else []
-                return self._handle_get_data_values(references)
-            
-            elif msg_type == MessageType.SET_DATA_VALUES.value:
-                updates = json.loads(data.decode('utf-8')) if data else {}
-                return self._handle_set_data_values(updates)
-            
-            elif msg_type == MessageType.OPERATE.value:
-                control_data = json.loads(data.decode('utf-8')) if data else {}
-                return self._handle_operate(control_data)
-            
-            elif msg_type == MessageType.ENABLE_REPORTING.value:
-                report_config = json.loads(data.decode('utf-8')) if data else {}
-                return self._handle_enable_reporting(client, report_config)
-            
-            elif msg_type == MessageType.HEARTBEAT.value:
-                return self._create_response(MessageType.HEARTBEAT, b"")
-            
-            elif msg_type == MessageType.DISCONNECT.value:
-                return None
-            
-            else:
-                self._log("warning", f"Unknown message type: {msg_type}")
-                return self._create_error_response(f"Unknown message type: {msg_type}")
-                
         except Exception as e:
-            self._log("error", f"Error processing message: {e}")
-            return self._create_error_response(str(e))
-    
-    # ========================================================================
-    # 消息处理器
-    # ========================================================================
-    
-    def _handle_get_server_directory(self) -> bytes:
-        """处理获取服务器目录请求"""
-        if not self.ied:
-            return self._create_error_response("No IED configured")
-        
-        directory = {
-            "ied_name": self.ied.name,
-            "manufacturer": self.ied.manufacturer,
-            "model": self.ied.model,
-            "revision": self.ied.revision,
-            "logical_devices": list(self.ied.logical_devices.keys()),
-        }
-        
-        return self._create_response(
-            MessageType.RESPONSE_OK,
-            json.dumps(directory).encode('utf-8')
-        )
-    
-    def _handle_get_ld_directory(self, ld_name: str) -> bytes:
-        """处理获取逻辑设备目录请求"""
-        if not self.ied:
-            return self._create_error_response("No IED configured")
-        
-        ld = self.ied.get_logical_device(ld_name)
-        if not ld:
-            return self._create_error_response(f"Logical device not found: {ld_name}")
-        
-        directory = {
-            "name": ld.name,
-            "description": ld.description,
-            "logical_nodes": list(ld.logical_nodes.keys()),
-        }
-        
-        return self._create_response(
-            MessageType.RESPONSE_OK,
-            json.dumps(directory).encode('utf-8')
-        )
-    
-    def _handle_get_ln_directory(self, path: str) -> bytes:
-        """处理获取逻辑节点目录请求"""
-        if not self.ied:
-            return self._create_error_response("No IED configured")
-        
-        # 解析路径: LD/LN
-        parts = path.split("/")
-        if len(parts) != 2:
-            return self._create_error_response(f"Invalid path: {path}")
-        
-        ld_name, ln_name = parts
-        
-        ld = self.ied.get_logical_device(ld_name)
-        if not ld:
-            return self._create_error_response(f"Logical device not found: {ld_name}")
-        
-        ln = ld.get_logical_node(ln_name)
-        if not ln:
-            return self._create_error_response(f"Logical node not found: {ln_name}")
-        
-        directory = {
-            "name": ln.name,
-            "class": ln.ln_class,
-            "description": ln.description,
-            "data_objects": {
-                do.name: {
-                    "cdc": do.cdc,
-                    "description": do.description,
-                    "attributes": list(do.attributes.keys()),
-                }
-                for do in ln.data_objects.values()
-            },
-        }
-        
-        return self._create_response(
-            MessageType.RESPONSE_OK,
-            json.dumps(directory).encode('utf-8')
-        )
-    
-    def _handle_get_data_values(self, references: List[str]) -> bytes:
-        """处理获取数据值请求"""
-        if not self.ied:
-            return self._create_error_response("No IED configured")
-        
-        values = {}
-        for ref in references:
-            da = self.ied.get_data_attribute(ref)
-            if da:
-                values[ref] = {
-                    "value": da.value,
-                    "quality": da.quality,
-                    "timestamp": da.timestamp.isoformat() if da.timestamp else None,
-                }
-            else:
-                values[ref] = {"error": "Not found"}
-        
-        return self._create_response(
-            MessageType.RESPONSE_OK,
-            json.dumps(values).encode('utf-8')
-        )
-    
-    def _handle_set_data_values(self, updates: Dict[str, Any]) -> bytes:
-        """处理设置数据值请求"""
-        if not self.ied:
-            return self._create_error_response("No IED configured")
-        
-        results = {}
-        for ref, value in updates.items():
-            success = self.set_data_value(ref, value)
-            results[ref] = "OK" if success else "Failed"
-        
-        return self._create_response(
-            MessageType.RESPONSE_OK,
-            json.dumps(results).encode('utf-8')
-        )
-    
-    def _handle_operate(self, control_data: Dict) -> bytes:
-        """处理控制操作请求"""
-        reference = control_data.get("reference", "")
-        value = control_data.get("value")
-        
-        self._log("info", f"Control operation: {reference} = {value}")
-        
-        success = self.set_data_value(reference, value)
-        
-        result = {
-            "reference": reference,
-            "success": success,
-            "timestamp": datetime.now().isoformat(),
-        }
-        
-        return self._create_response(
-            MessageType.RESPONSE_OK,
-            json.dumps(result).encode('utf-8')
-        )
-    
-    def _handle_enable_reporting(self, client: ClientConnection, config: Dict) -> bytes:
-        """处理启用报告请求"""
-        references = config.get("references", [])
-        
-        with self._client_lock:
-            client.subscriptions.update(references)
-        
-        self._log("info", f"Client {client.id} subscribed to: {references}")
-        
-        return self._create_response(
-            MessageType.RESPONSE_OK,
-            json.dumps({"subscribed": references}).encode('utf-8')
-        )
-    
-    # ========================================================================
-    # 工具方法
-    # ========================================================================
-    
-    def _create_response(self, msg_type: MessageType, data: bytes) -> bytes:
-        """创建响应消息"""
-        header = struct.pack(">BH", msg_type.value, len(data))
-        return header + data
-    
-    def _create_error_response(self, error_msg: str) -> bytes:
-        """创建错误响应"""
-        error_data = json.dumps({"error": error_msg}).encode('utf-8')
-        return self._create_response(MessageType.RESPONSE_ERROR, error_data)
-    
-    def _send_heartbeat(self, client: ClientConnection):
-        """发送心跳"""
-        try:
-            heartbeat = self._create_response(MessageType.HEARTBEAT, b"")
-            client.socket.sendall(heartbeat)
-        except Exception:
-            pass
-    
-    def _disconnect_client(self, client_id: str):
-        """断开客户端"""
-        with self._client_lock:
-            client = self._clients.pop(client_id, None)
-            if client:
-                try:
-                    client.socket.close()
-                except Exception:
-                    pass
-                self._log("info", f"Client disconnected: {client_id}")
-                self._notify_connection_change(client_id, False)
+            logger.error(f"Failed to update server value: {e}")
+            try:
+                iec61850.IedServer_unlockDataModel(self._ied_server)
+            except:
+                pass
     
     # ========================================================================
     # 数据更新
@@ -630,12 +523,13 @@ class IEC61850Server:
         
         while not self._stop_event.is_set():
             try:
-                if self.config.enable_random_values and self.ied:
+                if self.config.enable_random_values and self.ied and self._ied_server:
                     self._simulate_data_update()
                 
-                # 发送报告到订阅的客户端
-                if self.config.enable_reporting:
-                    self._send_reports()
+                # 更新连接客户端数量
+                if self._ied_server:
+                    num_connections = iec61850.IedServer_getNumberOfOpenConnections(self._ied_server)
+                    self._update_client_tracking(num_connections)
                 
             except Exception as e:
                 self._log("error", f"Update loop error: {e}")
@@ -647,33 +541,76 @@ class IEC61850Server:
         """模拟数据更新"""
         import random
         
-        if not self.ied:
+        if not self.ied or not self._ied_server:
             return
         
-        # 更新测量值
-        for ld in self.ied.logical_devices.values():
-            for ln in ld.logical_nodes.values():
-                if ln.ln_class == "MMXU":
-                    # 更新功率
-                    totw = ln.get_data_object("TotW")
-                    if totw:
-                        mag_attr = totw.get_attribute("mag")
-                        if mag_attr:
-                            new_value = mag_attr.value + random.uniform(-10, 10)
-                            mag_attr.set_value(new_value)
-                    
-                    # 更新频率
-                    hz = ln.get_data_object("Hz")
-                    if hz:
-                        mag_attr = hz.get_attribute("mag")
-                        if mag_attr:
-                            new_value = 50.0 + random.uniform(-0.1, 0.1)
-                            mag_attr.set_value(new_value)
+        try:
+            iec61850.IedServer_lockDataModel(self._ied_server)
+            
+            # 更新测量值
+            for ld in self.ied.logical_devices.values():
+                for ln in ld.logical_nodes.values():
+                    if ln.ln_class == "MMXU":
+                        # 更新功率
+                        totw = ln.get_data_object("TotW")
+                        if totw:
+                            mag_attr = totw.get_attribute("mag")
+                            if mag_attr:
+                                new_value = (mag_attr.value or 0) + random.uniform(-10, 10)
+                                mag_attr.set_value(new_value)
+                                
+                                ref = f"{ld.name}/{ln.name}.TotW.mag"
+                                da_node = self._model_nodes.get(ref)
+                                if da_node:
+                                    iec61850.IedServer_updateFloatAttributeValue(
+                                        self._ied_server, da_node, float(new_value)
+                                    )
+                        
+                        # 更新频率
+                        hz = ln.get_data_object("Hz")
+                        if hz:
+                            mag_attr = hz.get_attribute("mag")
+                            if mag_attr:
+                                new_value = 50.0 + random.uniform(-0.1, 0.1)
+                                mag_attr.set_value(new_value)
+                                
+                                ref = f"{ld.name}/{ln.name}.Hz.mag"
+                                da_node = self._model_nodes.get(ref)
+                                if da_node:
+                                    iec61850.IedServer_updateFloatAttributeValue(
+                                        self._ied_server, da_node, float(new_value)
+                                    )
+            
+            iec61850.IedServer_unlockDataModel(self._ied_server)
+            
+        except Exception as e:
+            logger.error(f"Simulation update error: {e}")
+            try:
+                iec61850.IedServer_unlockDataModel(self._ied_server)
+            except:
+                pass
     
-    def _send_reports(self):
-        """发送报告到订阅客户端"""
-        # TODO: 实现报告逻辑
-        pass
+    def _update_client_tracking(self, num_connections: int):
+        """更新客户端跟踪信息"""
+        # 简化的客户端跟踪 - pyiec61850不提供详细的客户端信息
+        # 我们只跟踪连接数量变化
+        current_count = len(self._clients)
+        
+        if num_connections > current_count:
+            # 新连接
+            for i in range(num_connections - current_count):
+                client_id = f"client_{datetime.now().timestamp()}_{i}"
+                self._clients[client_id] = ClientConnection(
+                    id=client_id,
+                    address=("unknown", 0),
+                )
+                self._notify_connection_change(client_id, True)
+        elif num_connections < current_count:
+            # 断开连接
+            clients_to_remove = list(self._clients.keys())[:(current_count - num_connections)]
+            for client_id in clients_to_remove:
+                del self._clients[client_id]
+                self._notify_connection_change(client_id, False)
     
     # ========================================================================
     # 回调和事件
@@ -748,14 +685,27 @@ class IEC61850Server:
     
     def get_status(self) -> Dict:
         """获取服务器状态"""
+        num_connections = 0
+        if self._ied_server:
+            try:
+                num_connections = iec61850.IedServer_getNumberOfOpenConnections(self._ied_server)
+            except:
+                num_connections = len(self._clients)
+        
         return {
             "state": self.state.name,
             "address": f"{self.config.ip_address}:{self.config.port}",
             "ied_name": self.ied.name if self.ied else None,
-            "client_count": len(self._clients),
+            "client_count": num_connections,
             "config": {
                 "update_interval_ms": self.config.update_interval_ms,
                 "enable_random_values": self.config.enable_random_values,
                 "enable_reporting": self.config.enable_reporting,
             }
         }
+    
+    def is_running(self) -> bool:
+        """检查服务器是否正在运行"""
+        if self._ied_server:
+            return iec61850.IedServer_isRunning(self._ied_server)
+        return False
