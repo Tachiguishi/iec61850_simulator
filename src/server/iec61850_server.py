@@ -275,7 +275,11 @@ class IEC61850Server:
     # ========================================================================
     # IED模型创建
     # ========================================================================
-    
+    def load_model(self, ied: IED):
+        """加载IED数据模型"""
+        self.ied = ied
+        self._create_ied_model()
+
     def _create_ied_model(self):
         """从Python数据模型创建pyiec61850 IED模型"""
         if not self.ied:
@@ -353,17 +357,34 @@ class IEC61850Server:
             DataType.INT16: iec61850.IEC61850_INT16,
             DataType.INT32: iec61850.IEC61850_INT32,
             DataType.INT64: iec61850.IEC61850_INT64,
+            DataType.INT128: iec61850.IEC61850_INT128,
             DataType.INT8U: iec61850.IEC61850_INT8U,
             DataType.INT16U: iec61850.IEC61850_INT16U,
+            DataType.INT24U: iec61850.IEC61850_INT24U,
             DataType.INT32U: iec61850.IEC61850_INT32U,
             DataType.FLOAT32: iec61850.IEC61850_FLOAT32,
             DataType.FLOAT64: iec61850.IEC61850_FLOAT64,
-            DataType.VISIBLE_STRING_64: iec61850.IEC61850_VISIBLE_STRING_64,
-            DataType.VISIBLE_STRING_255: iec61850.IEC61850_VISIBLE_STRING_255,
+            DataType.ENUM: iec61850.IEC61850_ENUMERATED,
+            DataType.OCTET_STRING_64: iec61850.IEC61850_OCTET_STRING_64,
+            # DataType.OCTET_STRING_6: iec61850.IEC61850_OCTET_STRING_6,
+            # DataType.OCTET_STRING_8: iec61850.IEC61850_OCTET_STRING_8,
+            # DataType.VISIBLE_STRING_32: iec61850.IEC61850_VISIBLE_STRING_32,
+            # DataType.VISIBLE_STRING_64: iec61850.IEC61850_VISIBLE_STRING_64,
+            # DataType.VISIBLE_STRING_65: iec61850.IEC61850_VISIBLE_STRING_65,
+            # DataType.VISIBLE_STRING_129: iec61850.IEC61850_VISIBLE_STRING_129,
+            # DataType.VISIBLE_STRING_255: iec61850.IEC61850_VISIBLE_STRING_255,
             DataType.UNICODE_STRING_255: iec61850.IEC61850_UNICODE_STRING_255,
             DataType.TIMESTAMP: iec61850.IEC61850_TIMESTAMP,
             DataType.QUALITY: iec61850.IEC61850_QUALITY,
-            DataType.ENUM: iec61850.IEC61850_ENUMERATED,
+            # DataType.CHECK: iec61850.IEC61850_CHECK,
+            # DataType.CODEDENUM: iec61850.IEC61850_CODEDENUM,
+            # DataType.GENERIC_BITSTRING: iec61850.IEC61850_GENERIC_BITSTRING,
+            # DataType.CONSTRUCTED: iec61850.IEC61850_CONSTRUCTED,
+            # DataType.ENTRY_TIME: iec61850.IEC61850_ENTRY_TIME,
+            # DataType.PHYCOMADDR: iec61850.IEC61850_PHYCOMADDR,
+            # DataType.CURRENCY: iec61850.IEC61850_CURRENCY,
+            # DataType.OPTFLDS: iec61850.IEC61850_OPTFLDS,
+            # DataType.TRGOPS: iec61850.IEC61850_TRGOPS,
         }
         return type_map.get(data_type, iec61850.IEC61850_INT32)
     
@@ -416,12 +437,6 @@ class IEC61850Server:
     # ========================================================================
     # IED管理
     # ========================================================================
-    
-    def load_ied(self, ied: IED):
-        """加载IED数据模型"""
-        self.ied = ied
-        self.data_model_manager.ieds[ied.name] = ied
-        self._log("info", f"Loaded IED: {ied.name}")
     
     def load_ied_from_yaml(self, yaml_path: str) -> bool:
         """从YAML文件加载IED"""
