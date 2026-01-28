@@ -497,12 +497,11 @@ class SCDParser:
 		try:
 			if data_type == DataType.BOOLEAN:
 				return value_str.lower() in ('true', '1', 'yes')
-			elif data_type in (DataType.INT8, DataType.INT16, DataType.INT32,
-							   DataType.INT64, DataType.INT8U, DataType.INT16U,
+			elif data_type in (DataType.INT8, DataType.INT16, DataType.INT24, DataType.INT32,
+							   DataType.INT64, DataType.INT8U, DataType.INT16U, DataType.INT24U,
 							   DataType.INT32U, DataType.DBPOS, DataType.QUALITY):
 				return int(value_str)
-			elif data_type in (DataType.FLOAT32, DataType.FLOAT64,
-							   DataType.ANALOGUE_VALUE):
+			elif data_type in (DataType.FLOAT32, DataType.FLOAT64):
 				return float(value_str)
 			else:
 				# 字符串类型
