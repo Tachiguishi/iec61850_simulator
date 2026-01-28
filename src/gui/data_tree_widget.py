@@ -112,7 +112,6 @@ class DataTreeWidget(QWidget):
             ld_name,
             "",
             "LD",
-            "",
             ld_data.get("description", "")
         ])
         ld_item.setData(0, Qt.ItemDataRole.UserRole, {
@@ -136,7 +135,6 @@ class DataTreeWidget(QWidget):
             f"{ln_name} [{ln_class}]",
             "",
             "LN",
-            "",
             ln_data.get("description", "")
         ])
         ln_ref = f"{ied_name}{ld_name}/{ln_name}"
@@ -161,7 +159,6 @@ class DataTreeWidget(QWidget):
             f"{do_name} ({cdc})",
             "",
             "DO",
-            "",
             do_data.get("description", "")
         ])
         do_ref = f"{ln_ref}.{do_name}"
@@ -186,19 +183,18 @@ class DataTreeWidget(QWidget):
         value = da_data.get("value", "")
         da_type = da_data.get("type", "")
         quality = da_data.get("quality", 0)
-        timestamp = da_data.get("timestamp", "")
+        description = da_data.get("description", "")
         
         # 格式化值显示
         value_str = self._format_value(value)
-        quality_str = self._format_quality(quality)
-        time_str = self._format_timestamp(timestamp)
+        # quality_str = self._format_quality(quality)
+        # time_str = self._format_timestamp(timestamp)
         
         da_item = QTreeWidgetItem([
             da_name,
             value_str,
             da_type,
-            quality_str,
-            time_str
+            description
         ])
         da_item.setData(0, Qt.ItemDataRole.UserRole, {
             "type": "da",
