@@ -18,7 +18,7 @@ IEC61850 SCD Parser Module
 from ctypes import Union
 from xml.etree import ElementTree as ET
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from .data_model import IED, AccessPoint, LogicalDevice, LogicalNode, DataObject, DataAttribute, DataType, FunctionalConstraint
 from loguru import logger
@@ -27,22 +27,6 @@ class SCDParser:
 	def __init__(self):
 		self._root = None
 		self._dataTypeTemplate_element = None
-		self._data_type_map = {
-			"BOOLEAN": DataType.BOOLEAN,
-			"Enum": DataType.ENUM,
-			"Dbpos": DataType.DBPOS,
-			"Quality": DataType.QUALITY,
-			"Timestamp": DataType.TIMESTAMP,
-			"VisString255": DataType.VIS_STRING_255,
-			"VisString64": DataType.VIS_STRING_64,
-			"VisString32": DataType.VIS_STRING_32,
-			"AnalogueValue": DataType.ANALOGUE_VALUE,
-			"Unit": DataType.UNIT,
-			"CMV": DataType.CMV,
-			"INT32": DataType.INT32,
-			"FLOAT32": DataType.FLOAT32,
-			"Struct": DataType.STRUCT,
-		}
 
 	def parse(self, scd_path: Union[str, Path]) -> List[IED]:
 		"""
@@ -68,7 +52,6 @@ class SCDParser:
 				ied = self._parse_ied_from_scd(ied_elem)
 				if ied:
 					loaded_ieds.append(ied)
-					logger.info(f"Loaded IED from SCD: {ied.name}")
 			
 			return loaded_ieds
 			
@@ -182,6 +165,10 @@ class SCDParser:
 						if do:
 							ln.add_data_object(do)
 			
+			# 解析 DOI (Data Object Instance) - 包含实例化描述和初始值
+			for doi_elem in self._findall_elements(ln_elem, 'DOI'):
+				self._apply_doi_to_data_object(doi_elem, ln)
+			
 			return ln
 			
 		except Exception as e:
@@ -230,23 +217,13 @@ class SCDParser:
 		try:
 			da_name = da_elem.get('name', 'DA')
 			da_fc = da_elem.get('fc', '')
-			da_btype = da_elem.get('bType', 'BOOLEAN')
+			da_btype = da_elem.get('bType', 'UNKNOWN')
 			da_type = da_elem.get('type', '')
 			
 			# 映射基本类型
-			data_type = self._data_type_map.get(da_btype, DataType.BOOLEAN)
+			data_type = DataType.from_string(da_btype, DataType.UNKNOWN)
 			
-			# 映射功能约束
-			fc_map = {
-				'ST': FunctionalConstraint.ST,
-				'MX': FunctionalConstraint.MX,
-				'SP': FunctionalConstraint.SP,
-				'SV': FunctionalConstraint.SV,
-				'CF': FunctionalConstraint.CF,
-				'DC': FunctionalConstraint.DC,
-				'CO': FunctionalConstraint.CO,
-			}
-			fc = fc_map.get(da_fc, FunctionalConstraint.DEFAULT)
+			fc = FunctionalConstraint.from_string(da_fc, FunctionalConstraint.DEFAULT)
 			
 			da = DataAttribute(
 				name=da_name,
@@ -275,11 +252,11 @@ class SCDParser:
 		"""从 SCD XML 元素解析 BDA (Basic Data Attribute)"""
 		try:
 			bda_name = bda_elem.get('name', 'BDA')
-			bda_btype = bda_elem.get('bType', 'BOOLEAN')
+			bda_btype = bda_elem.get('bType', 'UNKNOWN')
 			bda_type = bda_elem.get('type', '')
 			
 			# 映射基本类型
-			data_type = self._data_type_map.get(bda_btype, DataType.BOOLEAN)
+			data_type = DataType.from_string(bda_btype, DataType.UNKNOWN)
 			
 			bda = DataAttribute(
 				name=bda_name,
@@ -301,6 +278,204 @@ class SCDParser:
 		except Exception as e:
 			logger.error(f"Failed to parse DataAttribute: {e}")
 			return None
+	
+	def _apply_doi_to_data_object(self, doi_elem: ET.Element, ln: LogicalNode):
+		"""
+		应用 DOI (Data Object Instance) 到 LogicalNode 中的 DataObject
+		
+		DOI 包含实例化的描述和初始值
+		
+		Args:
+			doi_elem: DOI XML 元素
+			ln: LogicalNode 对象
+		"""
+		try:
+			doi_name = doi_elem.get('name', '')
+			if not doi_name:
+				return
+			
+			# 查找对应的 DataObject
+			do = ln.get_data_object(doi_name)
+			if not do:
+				logger.warning(f"DataObject {doi_name} not found in LogicalNode {ln.name}")
+				return
+			
+			# 更新描述
+			doi_desc = doi_elem.get('desc', '')
+			if doi_desc:
+				do.description = doi_desc
+			
+			# 处理 DAI (Data Attribute Instance)
+			for dai_elem in self._findall_elements(doi_elem, 'DAI'):
+				self._apply_dai_to_data_attribute(dai_elem, do)
+			
+			# 处理 SDI (Sub Data Instance) - 嵌套的数据对象实例
+			for sdi_elem in self._findall_elements(doi_elem, 'SDI'):
+				self._apply_sdi_to_data_attribute(sdi_elem, do)
+				
+		except Exception as e:
+			logger.error(f"Failed to apply DOI: {e}")
+	
+	def _apply_dai_to_data_attribute(self, dai_elem: ET.Element, do: DataObject):
+		"""
+		应用 DAI (Data Attribute Instance) 到 DataObject 中的 DataAttribute
+		
+		DAI 包含数据属性的初始值
+		
+		Args:
+			dai_elem: DAI XML 元素
+			do: DataObject 对象
+		"""
+		try:
+			dai_name = dai_elem.get('name', '')
+			if not dai_name:
+				return
+			
+			# 查找对应的 DataAttribute
+			da = do.get_attribute(dai_name)
+			if not da or not isinstance(da, DataAttribute):
+				logger.debug(f"DataAttribute {dai_name} not found in DataObject {do.name}")
+				return
+			
+			# 解析值 - 可能在 Val 子元素中
+			val_elem = self._find_element(dai_elem, 'Val')
+			if val_elem is not None and val_elem.text:
+				# 设置初始值
+				value_str = val_elem.text.strip()
+				da.value = self._convert_value_by_type(value_str, da.data_type)
+				logger.debug(f"Set value for {do.name}.{dai_name} = {da.value}")
+			
+			# 处理嵌套的 DAI（用于结构体类型）
+			for sub_dai_elem in self._findall_elements(dai_elem, 'DAI'):
+				# 对于结构体类型的属性，递归处理
+				if da.attributes:
+					self._apply_dai_to_sub_attribute(sub_dai_elem, da)
+					
+		except Exception as e:
+			logger.error(f"Failed to apply DAI: {e}")
+	
+	def _apply_sdi_to_data_attribute(self, sdi_elem: ET.Element, do: DataObject):
+		"""
+		应用 SDI (Sub Data Instance) 到数据对象的子属性
+		
+		Args:
+			sdi_elem: SDI XML 元素
+			do: DataObject 对象
+		"""
+		try:
+			sdi_name = sdi_elem.get('name', '')
+			if not sdi_name:
+				return
+			
+			# 查找对应的子属性（可能是 DataAttribute 或 DataObject）
+			attr = do.get_attribute(sdi_name)
+			if not attr:
+				logger.debug(f"Attribute {sdi_name} not found in DataObject {do.name}")
+				return
+			
+			# 如果是 DataAttribute 类型
+			if isinstance(attr, DataAttribute):
+				# 处理嵌套的 DAI
+				for dai_elem in self._findall_elements(sdi_elem, 'DAI'):
+					self._apply_dai_to_sub_attribute(dai_elem, attr)
+				
+				# 处理更深层的 SDI
+				for sub_sdi_elem in self._findall_elements(sdi_elem, 'SDI'):
+					self._apply_sdi_to_sub_attribute(sub_sdi_elem, attr)
+					
+		except Exception as e:
+			logger.error(f"Failed to apply SDI: {e}")
+	
+	def _apply_dai_to_sub_attribute(self, dai_elem: ET.Element, da: DataAttribute):
+		"""
+		应用 DAI 到 DataAttribute 的子属性（用于结构体类型）
+		
+		Args:
+			dai_elem: DAI XML 元素
+			da: DataAttribute 对象
+		"""
+		try:
+			dai_name = dai_elem.get('name', '')
+			if not dai_name:
+				return
+			
+			# 查找子属性
+			sub_da = da.get_sub_attribute(dai_name)
+			if not sub_da:
+				logger.debug(f"Sub attribute {dai_name} not found in {da.name}")
+				return
+			
+			# 解析值
+			val_elem = self._find_element(dai_elem, 'Val')
+			if val_elem is not None and val_elem.text:
+				value_str = val_elem.text.strip()
+				sub_da.value = self._convert_value_by_type(value_str, sub_da.data_type)
+				logger.debug(f"Set value for {da.name}.{dai_name} = {sub_da.value}")
+			
+			# 递归处理更深层的 DAI
+			for nested_dai_elem in self._findall_elements(dai_elem, 'DAI'):
+				self._apply_dai_to_sub_attribute(nested_dai_elem, sub_da)
+					
+		except Exception as e:
+			logger.error(f"Failed to apply DAI to sub attribute: {e}")
+
+	def _apply_sdi_to_sub_attribute(self, sdi_elem: ET.Element, da: DataAttribute):
+		"""
+		应用 SDI 到 DataAttribute 的子属性
+		
+		Args:
+			sdi_elem: SDI XML 元素
+			da: DataAttribute 对象
+		"""
+		try:
+			sdi_name = sdi_elem.get('name', '')
+			if not sdi_name:
+				return
+			
+			# 查找子属性
+			sub_attr = da.get_sub_attribute(sdi_name)
+			if not sub_attr:
+				logger.debug(f"Sub attribute {sdi_name} not found in {da.name}")
+				return
+			
+			# 处理嵌套的 DAI
+			for dai_elem in self._findall_elements(sdi_elem, 'DAI'):
+				self._apply_dai_to_sub_attribute(dai_elem, sub_attr)
+			
+			# 递归处理更深层的 SDI
+			for sub_sdi_elem in self._findall_elements(sdi_elem, 'SDI'):
+				self._apply_sdi_to_sub_attribute(sub_sdi_elem, sub_attr)
+					
+		except Exception as e:
+			logger.error(f"Failed to apply SDI to sub attribute: {e}")
+	
+	def _convert_value_by_type(self, value_str: str, data_type: DataType) -> Any:
+		"""
+		根据数据类型转换字符串值
+		
+		Args:
+			value_str: 值字符串
+			data_type: 数据类型
+			
+		Returns:
+			转换后的值
+		"""
+		try:
+			if data_type == DataType.BOOLEAN:
+				return value_str.lower() in ('true', '1', 'yes')
+			elif data_type in (DataType.INT8, DataType.INT16, DataType.INT32,
+							   DataType.INT64, DataType.INT8U, DataType.INT16U,
+							   DataType.INT32U, DataType.DBPOS, DataType.QUALITY):
+				return int(value_str)
+			elif data_type in (DataType.FLOAT32, DataType.FLOAT64,
+							   DataType.ANALOGUE_VALUE):
+				return float(value_str)
+			else:
+				# 字符串类型
+				return value_str
+		except (ValueError, TypeError) as e:
+			logger.warning(f"Value conversion failed for '{value_str} to {data_type}': {e}")
+			return value_str
 
 	def _find_element(self, parent: ET.Element, local_name: str) -> Optional[ET.Element]:
 		"""
