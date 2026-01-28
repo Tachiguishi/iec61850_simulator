@@ -41,6 +41,7 @@ class SCDParser:
 			"CMV": DataType.CMV,
 			"INT32": DataType.INT32,
 			"FLOAT32": DataType.FLOAT32,
+			"Struct": DataType.STRUCT,
 		}
 
 	def parse(self, scd_path: Union[str, Path]) -> List[IED]:
@@ -205,18 +206,18 @@ class SCDParser:
 				cdc=cdc,
 				description=''
 			)
-			
-			# 解析 DA (Data Attribute)（忽略命名空间）
-			for da_elem in self._findall_elements(do_type_def, 'DA'):
-				da = self._parse_data_attribute_from_scd(da_elem)
-				if da:
-					do.add_attribute(da)
-			
+
 			# 解析 SDO (Sub Data Object)（忽略命名空间）
 			for sdo_elem in self._findall_elements(do_type_def, 'SDO'):
 				sdo = self._parse_data_object_from_scd(sdo_elem)
 				if sdo:
 					do.add_attribute(sdo)
+			
+			# 解析 DA (Data Attribute)（忽略命名空间）
+			for da_elem in self._findall_elements(do_type_def, 'DA'):
+				da = self._parse_data_type(da_elem)
+				if da:
+					do.add_attribute(da)
 			
 			return do
 			
@@ -224,12 +225,11 @@ class SCDParser:
 			logger.error(f"Failed to parse DataObject: {e}")
 			return None
 	
-	def _parse_data_attribute_from_scd(self, da_elem: ET.Element,
-									) -> Optional[DataAttribute]:
+	def _parse_data_type(self, da_elem: ET.Element) -> Optional[DataAttribute]:
 		"""从 SCD XML 元素解析 DataAttribute"""
 		try:
 			da_name = da_elem.get('name', 'DA')
-			da_fc = da_elem.get('fc', 'ST')
+			da_fc = da_elem.get('fc', '')
 			da_btype = da_elem.get('bType', 'BOOLEAN')
 			da_type = da_elem.get('type', '')
 			
@@ -246,7 +246,7 @@ class SCDParser:
 				'DC': FunctionalConstraint.DC,
 				'CO': FunctionalConstraint.CO,
 			}
-			fc = fc_map.get(da_fc, FunctionalConstraint.ST)
+			fc = fc_map.get(da_fc, FunctionalConstraint.DEFAULT)
 			
 			da = DataAttribute(
 				name=da_name,
@@ -260,7 +260,7 @@ class SCDParser:
 				da_type_def = self._find_element_by_id(self._dataTypeTemplate_element, 'DAType', da_type)
 				if da_type_def is not None:
 					for bda_elem in self._findall_elements(da_type_def, 'BDA'):
-						sub_da = self._parse_data_attribute_from_scd(bda_elem)
+						sub_da = self._parse_data_attribute(fc, bda_elem)
 						if sub_da:
 							da.add_sub_attribute(sub_da)
 			
@@ -269,7 +269,38 @@ class SCDParser:
 		except Exception as e:
 			logger.error(f"Failed to parse DataAttribute: {e}")
 			return None
-		
+	
+
+	def _parse_data_attribute(self, fc: FunctionalConstraint, bda_elem: ET.Element) -> Optional[DataAttribute]:
+		"""从 SCD XML 元素解析 BDA (Basic Data Attribute)"""
+		try:
+			bda_name = bda_elem.get('name', 'BDA')
+			bda_btype = bda_elem.get('bType', 'BOOLEAN')
+			bda_type = bda_elem.get('type', '')
+			
+			# 映射基本类型
+			data_type = self._data_type_map.get(bda_btype, DataType.BOOLEAN)
+			
+			bda = DataAttribute(
+				name=bda_name,
+				data_type=data_type,
+				fc=fc,
+				value=None
+			)
+			
+			# 如果有 type 属性，说明是结构体类型，需要解析子属性（忽略命名空间）
+			if bda_type:
+				bda_type_def = self._find_element_by_id(self._dataTypeTemplate_element, 'DAType', bda_type)
+				if bda_type_def is not None:
+					for sub_bda_elem in self._findall_elements(bda_type_def, 'BDA'):
+						sub_bda = self._parse_data_attribute(fc, sub_bda_elem)
+						if sub_bda:
+							bda.add_sub_attribute(sub_bda)
+			
+			return bda
+		except Exception as e:
+			logger.error(f"Failed to parse DataAttribute: {e}")
+			return None
 
 	def _find_element(self, parent: ET.Element, local_name: str) -> Optional[ET.Element]:
 		"""

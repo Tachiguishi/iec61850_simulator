@@ -213,7 +213,14 @@ class DataTreeWidget(QWidget):
             da_item.setForeground(1, QBrush(QColor("#cc0000")))
         
         parent.addChild(da_item)
-        self._data_items[da_ref] = da_item
+
+        # 加载子属性（如果有）
+        for sub_da_name, sub_da_data in da_data.get("attributes", {}).items():
+            self._add_data_attribute(da_item, do_ref, sub_da_name, sub_da_data)
+
+        # 没有子属性才加入数据项字典
+        if da_data.get("attributes", {}) == {}:
+            self._data_items[da_ref] = da_item
     
     def update_value(self, reference: str, value: Any, quality: int = 0, 
                      timestamp: Optional[str] = None):

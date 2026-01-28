@@ -69,7 +69,7 @@ class IEC61850Element:
 
 class DataType(Enum):
     """IEC61850基本数据类型"""
-    STRUCT = "STRUCT"
+    STRUCT = "Struct"
     BOOLEAN = "BOOLEAN"
     INT8 = "INT8"
     INT16 = "INT16"
@@ -98,6 +98,7 @@ class DataType(Enum):
 
 class FunctionalConstraint(Enum):
     """功能约束 (Functional Constraint)"""
+    DEFAULT = ""
     ST = "ST"  # Status
     MX = "MX"  # Measured values
     SP = "SP"  # Setpoint
@@ -177,7 +178,7 @@ class DataAttribute(IEC61850Element):
         trigger_options: 触发选项
         quality: 质量标志
         timestamp: 时间戳
-        sub_attributes: 子属性字典（用于结构体类型）
+        attributes: 子属性字典（用于结构体类型）
     """
     data_type: DataType = DataType.BOOLEAN
     value: Any = None
@@ -185,7 +186,7 @@ class DataAttribute(IEC61850Element):
     trigger_options: int = TriggerOption.DATA_CHANGE | TriggerOption.QUALITY_CHANGE
     quality: Quality = Quality.GOOD
     timestamp: Optional[datetime] = None
-    sub_attributes: Dict[str, 'DataAttribute'] = field(default_factory=dict)
+    attributes: Dict[str, 'DataAttribute'] = field(default_factory=dict)
     
     # 内部字段
     _callbacks: List[Callable] = field(default_factory=list, repr=False)
@@ -198,7 +199,7 @@ class DataAttribute(IEC61850Element):
     def _convert_value(self):
         """根据数据类型转换值（仅用于基础类型）"""
         # 如果有子属性，说明是结构体类型，不需要转换值
-        if self.sub_attributes:
+        if self.attributes:
             return
             
         if self.value is None:
@@ -225,16 +226,16 @@ class DataAttribute(IEC61850Element):
     def add_sub_attribute(self, attr: 'DataAttribute') -> 'DataAttribute':
         """添加子属性（用于结构体类型）"""
         attr._parent = self
-        self.sub_attributes[attr.name] = attr
+        self.attributes[attr.name] = attr
         return attr
     
     def get_sub_attribute(self, name: str) -> Optional['DataAttribute']:
         """获取子属性"""
-        return self.sub_attributes.get(name)
+        return self.attributes.get(name)
     
     def is_struct(self) -> bool:
         """判断是否为结构体类型"""
-        return len(self.sub_attributes) > 0
+        return len(self.attributes) > 0
     
     def set_value(self, value: Any, update_timestamp: bool = True) -> bool:
         """
@@ -282,8 +283,8 @@ class DataAttribute(IEC61850Element):
         }
         
         # 如果是结构体类型，序列化子属性
-        if self.sub_attributes:
-            result["sub_attributes"] = {k: v.to_dict() for k, v in self.sub_attributes.items()}
+        if self.attributes:
+            result["attributes"] = {k: v.to_dict() for k, v in self.attributes.items()}
         else:
             # 基础类型才有 value, quality, timestamp
             result["value"] = self.value
