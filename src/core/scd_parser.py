@@ -534,6 +534,7 @@ class SCDParser:
 			# 解析 FCDA (Functional Constrained Data Attribute)
 			for fcda_elem in self._findall_elements(dataset_elem, 'FCDA'):
 				fcda_info = {
+					'prefix': fcda_elem.get('prefix', ''),
 					'ldInst': fcda_elem.get('ldInst', ''),
 					'lnClass': fcda_elem.get('lnClass', ''),
 					'lnInst': fcda_elem.get('lnInst', ''),

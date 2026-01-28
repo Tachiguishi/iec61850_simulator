@@ -497,7 +497,7 @@ class DataSet(IEC61850Element):
 		name: 数据集名称
 		fcdas: FCDA (Functional Constrained Data Attribute) 列表
 	"""
-	fcdas: List[Dict[str, str]] = field(default_factory=list)  # FCDA列表，每个FCDA包含ldInst, lnClass, lnInst, doName, daName等
+	fcdas: List[Dict[str, str]] = field(default_factory=list)  # FCDA列表，每个FCDA包含prefix, ldInst, lnClass, lnInst, doName, daName等
 	
 	def add_fcda(self, fcda_info: Dict[str, str]):
 		"""添加 FCDA"""
