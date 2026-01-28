@@ -15,16 +15,52 @@ IEC61850 Data Model Implementation
 
 from __future__ import annotations
 
-import time
 import uuid
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, IntEnum
 from typing import Any, Callable, Dict, List, Optional, Union
-from pathlib import Path
 
 import yaml
 from loguru import logger
+
+
+# ============================================================================
+# 基础类
+# ============================================================================
+
+@dataclass
+class IEC61850Element:
+    """
+    IEC61850 数据模型基类
+    
+    为 DataAttribute, DataObject, LogicalNode 提供公共属性和方法
+    """
+    name: str
+    description: str = ""
+    
+    _id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    _parent: Optional['IEC61850Element'] = field(default=None, repr=False)
+    
+    @property
+    def reference(self) -> str:
+        """获取完整引用路径"""
+        if self._parent:
+            separator = self._get_separator()
+            return f"{self._parent.reference}{separator}{self.name}"
+        return self.name
+    
+    def _get_separator(self) -> str:
+        """获取路径分隔符（子类可重写）"""
+        return "."
+    
+    def to_dict(self) -> Dict:
+        """转换为字典（子类应重写）"""
+        return {
+            "name": self.name,
+            "description": self.description,
+        }
 
 
 # ============================================================================
@@ -33,6 +69,7 @@ from loguru import logger
 
 class DataType(Enum):
     """IEC61850基本数据类型"""
+    STRUCT = "STRUCT"
     BOOLEAN = "BOOLEAN"
     INT8 = "INT8"
     INT16 = "INT16"
@@ -128,30 +165,29 @@ class DbPos(IntEnum):
 # ============================================================================
 
 @dataclass
-class DataAttribute:
+class DataAttribute(IEC61850Element):
     """
-    数据属性 - IEC61850数据模型最底层元素
+    数据属性 - IEC61850数据模型元素，可以是基础类型或结构体
     
     Attributes:
         name: 属性名称
-        data_type: 数据类型
-        value: 当前值
+        data_type: 数据类型（基础类型或结构体类型）
+        value: 当前值（仅用于基础类型）
         fc: 功能约束
         trigger_options: 触发选项
         quality: 质量标志
         timestamp: 时间戳
+        sub_attributes: 子属性字典（用于结构体类型）
     """
-    name: str
-    data_type: DataType
+    data_type: DataType = DataType.BOOLEAN
     value: Any = None
     fc: FunctionalConstraint = FunctionalConstraint.ST
     trigger_options: int = TriggerOption.DATA_CHANGE | TriggerOption.QUALITY_CHANGE
     quality: Quality = Quality.GOOD
     timestamp: Optional[datetime] = None
+    sub_attributes: Dict[str, 'DataAttribute'] = field(default_factory=dict)
     
     # 内部字段
-    _id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    _parent: Optional[DataObject] = field(default=None, repr=False)
     _callbacks: List[Callable] = field(default_factory=list, repr=False)
     
     def __post_init__(self):
@@ -160,7 +196,11 @@ class DataAttribute:
         self._convert_value()
     
     def _convert_value(self):
-        """根据数据类型转换值"""
+        """根据数据类型转换值（仅用于基础类型）"""
+        # 如果有子属性，说明是结构体类型，不需要转换值
+        if self.sub_attributes:
+            return
+            
         if self.value is None:
             return
             
@@ -182,12 +222,19 @@ class DataAttribute:
         except (ValueError, TypeError) as e:
             logger.warning(f"Value conversion failed for {self.name}: {e}")
     
-    @property
-    def reference(self) -> str:
-        """获取完整引用路径"""
-        if self._parent:
-            return f"{self._parent.reference}.{self.name}"
-        return self.name
+    def add_sub_attribute(self, attr: 'DataAttribute') -> 'DataAttribute':
+        """添加子属性（用于结构体类型）"""
+        attr._parent = self
+        self.sub_attributes[attr.name] = attr
+        return attr
+    
+    def get_sub_attribute(self, name: str) -> Optional['DataAttribute']:
+        """获取子属性"""
+        return self.sub_attributes.get(name)
+    
+    def is_struct(self) -> bool:
+        """判断是否为结构体类型"""
+        return len(self.sub_attributes) > 0
     
     def set_value(self, value: Any, update_timestamp: bool = True) -> bool:
         """
@@ -228,14 +275,22 @@ class DataAttribute:
     
     def to_dict(self) -> Dict:
         """转换为字典"""
-        return {
+        result = {
             "name": self.name,
             "type": self.data_type.value,
-            "value": self.value,
             "fc": self.fc.value,
-            "quality": self.quality,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
         }
+        
+        # 如果是结构体类型，序列化子属性
+        if self.sub_attributes:
+            result["sub_attributes"] = {k: v.to_dict() for k, v in self.sub_attributes.items()}
+        else:
+            # 基础类型才有 value, quality, timestamp
+            result["value"] = self.value
+            result["quality"] = self.quality
+            result["timestamp"] = self.timestamp.isoformat() if self.timestamp else None
+        
+        return result
 
 
 # ============================================================================
@@ -243,39 +298,27 @@ class DataAttribute:
 # ============================================================================
 
 @dataclass
-class DataObject:
+class DataObject(IEC61850Element):
     """
-    数据对象 - 包含多个数据属性的容器
+    数据对象 - 包含多个数据属性或子数据对象的容器
     
     Attributes:
         name: 对象名称
         cdc: 公共数据类 (Common Data Class)
         description: 描述
-        attributes: 数据属性列表
+        attributes: 数据属性或子数据对象字典
     """
-    name: str
-    cdc: str  # 如 SPS, DPS, MV, CMV, etc.
-    description: str = ""
-    attributes: Dict[str, DataAttribute] = field(default_factory=dict)
+    cdc: str = ""  # 如 SPS, DPS, MV, CMV, etc.
+    attributes: Dict[str, Union['DataAttribute', 'DataObject']] = field(default_factory=dict)
     
-    _id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    _parent: Optional[LogicalNode] = field(default=None, repr=False)
-    
-    @property
-    def reference(self) -> str:
-        """获取完整引用路径"""
-        if self._parent:
-            return f"{self._parent.reference}.{self.name}"
-        return self.name
-    
-    def add_attribute(self, attr: DataAttribute) -> DataAttribute:
-        """添加数据属性"""
+    def add_attribute(self, attr: Union['DataAttribute', 'DataObject']) -> Union['DataAttribute', 'DataObject']:
+        """添加数据属性或子数据对象"""
         attr._parent = self
         self.attributes[attr.name] = attr
         return attr
     
-    def get_attribute(self, name: str) -> Optional[DataAttribute]:
-        """获取数据属性"""
+    def get_attribute(self, name: str) -> Optional[Union['DataAttribute', 'DataObject']]:
+        """获取数据属性或子数据对象"""
         return self.attributes.get(name)
     
     def get_value(self, attr_name: str = "stVal") -> Any:
@@ -305,7 +348,7 @@ class DataObject:
 # ============================================================================
 
 @dataclass
-class LogicalNode:
+class LogicalNode(IEC61850Element):
     """
     逻辑节点 - IEC61850功能单元
     
@@ -316,20 +359,15 @@ class LogicalNode:
     - XCBR: 断路器
     - MMXU: 测量单元
     """
-    name: str
-    ln_class: str  # LN类型，如 PTOC, XCBR
-    description: str = ""
+    prefix: str = ""  # 前缀，如 "WarnPTOC1" 中的 "Warn"
+    ln_class: str = ""  # LN类型，如 PTOC, XCBR
+    ln_inst: str = ""  # 实例标识符，如 "1" 在 "PTOC1"
+    ln_type: str = ""  # LN类型标识符
     data_objects: Dict[str, DataObject] = field(default_factory=dict)
     
-    _id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    _parent: Optional[LogicalDevice] = field(default=None, repr=False)
-    
-    @property
-    def reference(self) -> str:
-        """获取完整引用路径"""
-        if self._parent:
-            return f"{self._parent.reference}/{self.name}"
-        return self.name
+    def _get_separator(self) -> str:
+        """LogicalNode 使用 '/' 作为分隔符"""
+        return "/"
     
     def add_data_object(self, do: DataObject) -> DataObject:
         """添加数据对象"""
@@ -363,7 +401,7 @@ class LogicalNode:
 # ============================================================================
 
 @dataclass
-class LogicalDevice:
+class LogicalDevice(IEC61850Element):
     """
     逻辑设备 - 逻辑节点的容器
     
@@ -372,19 +410,7 @@ class LogicalDevice:
         description: 描述
         logical_nodes: 逻辑节点字典
     """
-    name: str
-    description: str = ""
     logical_nodes: Dict[str, LogicalNode] = field(default_factory=dict)
-    
-    _id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    _parent: Optional[IED] = field(default=None, repr=False)
-    
-    @property
-    def reference(self) -> str:
-        """获取完整引用路径"""
-        if self._parent:
-            return f"{self._parent.name}{self.name}"
-        return self.name
     
     def add_logical_node(self, ln: LogicalNode) -> LogicalNode:
         """添加逻辑节点"""
@@ -412,30 +438,16 @@ class LogicalDevice:
         }
 
 
-# ============================================================================
-# IED (Intelligent Electronic Device)
-# ============================================================================
-
-@dataclass 
-class IED:
+@dataclass
+class AccessPoint(IEC61850Element):
     """
-    智能电子设备 - IEC61850数据模型顶层容器
+    访问点 - IED的网络访问点容器
     
     Attributes:
-        name: IED名称
-        manufacturer: 制造商
-        model: 型号
-        revision: 版本
+        name: 访问点名称
         logical_devices: 逻辑设备字典
     """
-    name: str
-    manufacturer: str = "IEC61850Simulator"
-    model: str = "VirtualIED"
-    revision: str = "1.0"
-    description: str = ""
     logical_devices: Dict[str, LogicalDevice] = field(default_factory=dict)
-    
-    _id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     
     def add_logical_device(self, ld: LogicalDevice) -> LogicalDevice:
         """添加逻辑设备"""
@@ -446,6 +458,52 @@ class IED:
     def get_logical_device(self, name: str) -> Optional[LogicalDevice]:
         """获取逻辑设备"""
         return self.logical_devices.get(name)
+    
+    def to_dict(self) -> Dict:
+        """转换为字典"""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "logical_devices": {k: v.to_dict() for k, v in self.logical_devices.items()},
+        }
+
+# ============================================================================
+# IED (Intelligent Electronic Device)
+# ============================================================================
+
+@dataclass 
+class IED(IEC61850Element):
+    """
+    智能电子设备 - IEC61850数据模型顶层容器
+    
+    Attributes:
+        name: IED名称
+        manufacturer: 制造商
+        model: 型号
+        revision: 版本
+        access_points: 访问点字典
+    """
+    manufacturer: str = "IEC61850Simulator"
+    model: str = "VirtualIED"
+    revision: str = "1.0"
+    access_points: Dict[str, AccessPoint] = field(default_factory=dict)
+    
+    def add_access_point(self, ap: AccessPoint) -> AccessPoint:
+        """添加访问点"""
+        ap._parent = self
+        self.access_points[ap.name] = ap
+        return ap
+    
+    def get_access_point(self, name: str) -> Optional[AccessPoint]:
+        """获取访问点"""
+        return self.access_points.get(name)
+    
+    def get_logical_devices(self) -> List[LogicalDevice]:
+        """获取所有逻辑设备"""
+        devices = []
+        for ap in self.access_points.values():
+            devices.extend(ap.logical_devices.values())
+        return devices
     
     def get_data_attribute(self, reference: str) -> Optional[DataAttribute]:
         """
@@ -479,19 +537,25 @@ class IED:
             da_name = ".".join(parts[2:])
             
             # 查找
-            ld = self.logical_devices.get(ld_name)
-            if not ld:
-                return None
+            for ap in self.access_points.values():
+                if not ap:
+                    continue
+                
+                ld = ap.logical_devices.get(ld_name)
+                if not ld:
+                    continue
+                
+                ln = ld.logical_nodes.get(ln_name)
+                if not ln:
+                    continue
+                
+                do = ln.data_objects.get(do_name)
+                if not do:
+                    continue
             
-            ln = ld.logical_nodes.get(ln_name)
-            if not ln:
-                return None
+                return do.attributes.get(da_name)
             
-            do = ln.data_objects.get(do_name)
-            if not do:
-                return None
-            
-            return do.attributes.get(da_name)
+            return None
             
         except Exception as e:
             logger.error(f"Failed to parse reference '{reference}': {e}")
@@ -515,213 +579,5 @@ class IED:
             "model": self.model,
             "revision": self.revision,
             "description": self.description,
-            "logical_devices": {k: v.to_dict() for k, v in self.logical_devices.items()},
+            "logical_devices": {ld.name: ld.to_dict() for ld in self.get_logical_devices()},
         }
-
-
-# ============================================================================
-# 数据模型管理器
-# ============================================================================
-
-class DataModelManager:
-    """
-    数据模型管理器 - 负责加载、创建和管理IED数据模型
-    """
-    
-    def __init__(self):
-        self.ieds: Dict[str, IED] = {}
-        self._data_type_map = {
-            "BOOLEAN": DataType.BOOLEAN,
-            "Enum": DataType.ENUM,
-            "Dbpos": DataType.DBPOS,
-            "Quality": DataType.QUALITY,
-            "Timestamp": DataType.TIMESTAMP,
-            "VisString255": DataType.VIS_STRING_255,
-            "VisString64": DataType.VIS_STRING_64,
-            "VisString32": DataType.VIS_STRING_32,
-            "AnalogueValue": DataType.ANALOGUE_VALUE,
-            "Unit": DataType.UNIT,
-            "CMV": DataType.CMV,
-            "INT32": DataType.INT32,
-            "FLOAT32": DataType.FLOAT32,
-        }
-    
-    def load_from_yaml(self, yaml_path: Union[str, Path]) -> Optional[IED]:
-        """
-        从YAML配置文件加载数据模型
-        
-        Args:
-            yaml_path: YAML文件路径
-            
-        Returns:
-            加载的IED对象
-        """
-        try:
-            with open(yaml_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-            
-            return self._build_ied_from_config(config.get('ied', {}))
-            
-        except Exception as e:
-            logger.error(f"Failed to load data model from {yaml_path}: {e}")
-            return None
-    
-    def _build_ied_from_config(self, ied_config: Dict) -> IED:
-        """从配置字典构建IED"""
-        ied = IED(
-            name=ied_config.get('name', 'SimulatedIED'),
-            description=ied_config.get('description', ''),
-        )
-        
-        for ld_config in ied_config.get('logical_devices', []):
-            ld = LogicalDevice(
-                name=ld_config.get('name', 'LD0'),
-                description=ld_config.get('description', ''),
-            )
-            
-            for ln_config in ld_config.get('logical_nodes', []):
-                ln = LogicalNode(
-                    name=ln_config.get('name', 'LN0'),
-                    ln_class=ln_config.get('class', 'LLN0'),
-                    description=ln_config.get('description', ''),
-                )
-                
-                for do_config in ln_config.get('data_objects', []):
-                    do = DataObject(
-                        name=do_config.get('name', 'DO0'),
-                        cdc=do_config.get('cdc', 'SPS'),
-                        description=do_config.get('description', ''),
-                    )
-                    
-                    for da_config in do_config.get('data_attributes', []):
-                        data_type = self._data_type_map.get(
-                            da_config.get('type', 'BOOLEAN'),
-                            DataType.BOOLEAN
-                        )
-                        da = DataAttribute(
-                            name=da_config.get('name', 'val'),
-                            data_type=data_type,
-                            value=da_config.get('value'),
-                        )
-                        do.add_attribute(da)
-                    
-                    ln.add_data_object(do)
-                
-                ld.add_logical_node(ln)
-            
-            ied.add_logical_device(ld)
-        
-        self.ieds[ied.name] = ied
-        logger.info(f"Loaded IED: {ied.name} with {len(ied.logical_devices)} logical devices")
-        return ied
-    
-    def create_default_ied(self, name: str = "SimulatedIED") -> IED:
-        """
-        创建默认IED数据模型
-        
-        Args:
-            name: IED名称
-            
-        Returns:
-            新创建的IED对象
-        """
-        ied = IED(name=name, description="Default simulated IED")
-        
-        # 创建保护逻辑设备
-        prot_ld = LogicalDevice(name="PROT", description="Protection LD")
-        
-        # LLN0
-        lln0 = LogicalNode(name="LLN0", ln_class="LLN0", description="Logical Node Zero")
-        
-        mod_do = DataObject(name="Mod", cdc="ENC", description="Mode")
-        mod_do.add_attribute(DataAttribute("stVal", DataType.ENUM, value=1))
-        mod_do.add_attribute(DataAttribute("q", DataType.QUALITY, value=0))
-        mod_do.add_attribute(DataAttribute("t", DataType.TIMESTAMP))
-        lln0.add_data_object(mod_do)
-        
-        beh_do = DataObject(name="Beh", cdc="ENS", description="Behaviour")
-        beh_do.add_attribute(DataAttribute("stVal", DataType.ENUM, value=1))
-        beh_do.add_attribute(DataAttribute("q", DataType.QUALITY, value=0))
-        lln0.add_data_object(beh_do)
-        
-        prot_ld.add_logical_node(lln0)
-        
-        # PTOC1 - 过流保护
-        ptoc1 = LogicalNode(name="PTOC1", ln_class="PTOC", description="Overcurrent Protection")
-        
-        ptoc_mod = DataObject(name="Mod", cdc="ENC", description="Mode")
-        ptoc_mod.add_attribute(DataAttribute("stVal", DataType.ENUM, value=1))
-        ptoc1.add_data_object(ptoc_mod)
-        
-        op_do = DataObject(name="Op", cdc="ACT", description="Operate")
-        op_do.add_attribute(DataAttribute("general", DataType.BOOLEAN, value=False))
-        op_do.add_attribute(DataAttribute("phsA", DataType.BOOLEAN, value=False))
-        op_do.add_attribute(DataAttribute("phsB", DataType.BOOLEAN, value=False))
-        op_do.add_attribute(DataAttribute("phsC", DataType.BOOLEAN, value=False))
-        op_do.add_attribute(DataAttribute("q", DataType.QUALITY, value=0))
-        op_do.add_attribute(DataAttribute("t", DataType.TIMESTAMP))
-        ptoc1.add_data_object(op_do)
-        
-        prot_ld.add_logical_node(ptoc1)
-        
-        # XCBR1 - 断路器
-        xcbr1 = LogicalNode(name="XCBR1", ln_class="XCBR", description="Circuit Breaker")
-        
-        pos_do = DataObject(name="Pos", cdc="DPC", description="Position")
-        pos_do.add_attribute(DataAttribute("stVal", DataType.DBPOS, value=DbPos.ON))
-        pos_do.add_attribute(DataAttribute("q", DataType.QUALITY, value=0))
-        pos_do.add_attribute(DataAttribute("t", DataType.TIMESTAMP))
-        pos_do.add_attribute(DataAttribute("ctlModel", DataType.ENUM, value=ControlModel.DIRECT_WITH_NORMAL_SECURITY))
-        xcbr1.add_data_object(pos_do)
-        
-        prot_ld.add_logical_node(xcbr1)
-        
-        ied.add_logical_device(prot_ld)
-        
-        # 创建测量逻辑设备
-        meas_ld = LogicalDevice(name="MEAS", description="Measurement LD")
-        
-        # MMXU1 - 测量单元
-        mmxu1 = LogicalNode(name="MMXU1", ln_class="MMXU", description="Measurement Unit")
-        
-        totw_do = DataObject(name="TotW", cdc="MV", description="Total Active Power")
-        totw_do.add_attribute(DataAttribute("mag", DataType.ANALOGUE_VALUE, value=1000.0, fc=FunctionalConstraint.MX))
-        totw_do.add_attribute(DataAttribute("q", DataType.QUALITY, value=0))
-        totw_do.add_attribute(DataAttribute("t", DataType.TIMESTAMP))
-        mmxu1.add_data_object(totw_do)
-        
-        hz_do = DataObject(name="Hz", cdc="MV", description="Frequency")
-        hz_do.add_attribute(DataAttribute("mag", DataType.ANALOGUE_VALUE, value=50.0, fc=FunctionalConstraint.MX))
-        hz_do.add_attribute(DataAttribute("q", DataType.QUALITY, value=0))
-        hz_do.add_attribute(DataAttribute("t", DataType.TIMESTAMP))
-        mmxu1.add_data_object(hz_do)
-        
-        meas_ld.add_logical_node(mmxu1)
-        ied.add_logical_device(meas_ld)
-        
-        self.ieds[ied.name] = ied
-        logger.info(f"Created default IED: {ied.name}")
-        return ied
-    
-    def get_ied(self, name: str) -> Optional[IED]:
-        """获取IED"""
-        return self.ieds.get(name)
-    
-    def remove_ied(self, name: str) -> bool:
-        """移除IED"""
-        if name in self.ieds:
-            del self.ieds[name]
-            return True
-        return False
-    
-    def export_to_yaml(self, ied: IED, output_path: Union[str, Path]) -> bool:
-        """导出IED配置到YAML文件"""
-        try:
-            with open(output_path, 'w', encoding='utf-8') as f:
-                yaml.dump({"ied": ied.to_dict()}, f, 
-                         allow_unicode=True, default_flow_style=False)
-            logger.info(f"Exported IED {ied.name} to {output_path}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to export IED: {e}")
-            return False

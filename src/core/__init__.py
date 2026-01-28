@@ -17,8 +17,9 @@ from .data_model import (
     LogicalNode,
     LogicalDevice,
     IED,
-    DataModelManager,
 )
+
+from .data_model_manager import DataModelManager
 
 __all__ = [
     "DataAttribute",

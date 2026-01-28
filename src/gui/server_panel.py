@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gui.data_tree_widget import DataTreeWidget
 from server.iec61850_server import IEC61850Server, ServerConfig, ServerState
-from core.data_model import DataModelManager
+from core.data_model_manager import DataModelManager
 
 # UI文件路径
 UI_DIR = Path(__file__).parent / "ui"
@@ -195,7 +195,7 @@ class ServerPanel(QWidget):
         ied = self.data_model_manager.create_default_ied(name)
         
         if self.server:
-            self.server.load_ied(ied)
+            self.server.load_model(ied)
         
         self._update_data_tree()
         self.modelInfoLabel.setText(f"已加载: {name}")
@@ -205,17 +205,17 @@ class ServerPanel(QWidget):
         """加载数据模型"""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "加载数据模型", "",
-            "YAML Files (*.yaml *.yml);;All Files (*)"
+            "SCL Files (*.scd *.cid *.icd);;All Files (*)"
         )
         
         if file_path:
-            ied = self.data_model_manager.load_from_yaml(file_path)
-            if ied:
+            ieds = self.data_model_manager.load_from_scd(file_path)
+            if ieds:
                 if self.server:
-                    self.server.load_ied(ied)
-                self.modelInfoLabel.setText(f"已加载: {ied.name}")
+                    self.server.load_model(ieds[1])
+                self.modelInfoLabel.setText(f"已加载: {ieds[1].name}")
                 self._update_data_tree()
-                self.log_message.emit("info", f"已加载IED: {ied.name}")
+                self.log_message.emit("info", f"已加载IED: {ieds[1].name}")
             else:
                 QMessageBox.critical(self, "错误", "加载数据模型失败")
     

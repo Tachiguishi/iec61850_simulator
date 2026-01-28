@@ -43,9 +43,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.data_model import (
     IED, LogicalDevice, LogicalNode, DataObject, DataAttribute,
-    DataModelManager, DataType, Quality, FunctionalConstraint
+    DataType, Quality, FunctionalConstraint
 )
-
+from core.data_model_manager import DataModelManager
 
 class ServerState(Enum):
     """服务器状态"""
@@ -166,10 +166,7 @@ class IEC61850Server:
         try:
             self._set_state(ServerState.STARTING)
             self._stop_event.clear()
-            
-            # 创建IED模型
-            self._create_ied_model()
-            
+
             # 创建服务器配置
             server_config = iec61850.IedServerConfig_create()
             iec61850.IedServerConfig_setMaxMmsConnections(server_config, self.config.max_connections)
@@ -289,8 +286,9 @@ class IEC61850Server:
         self._ied_model = iec61850.IedModel_create(self.ied.name)
         
         # 创建逻辑设备
-        for ld_name, ld in self.ied.logical_devices.items():
-            self._create_logical_device(ld)
+        for ap_name, ap in self.ied.access_points.items():
+            for ld_name, ld in ap.logical_devices.items():
+                self._create_logical_device(ld)
     
     def _create_logical_device(self, ld: LogicalDevice):
         """创建逻辑设备"""
@@ -338,7 +336,7 @@ class IEC61850Server:
             fc, 
             trigger_options, 
             0,  # 非数组
-            None  # 无短地址
+            0  # 无短地址
         )
         
         # 存储节点引用用于后续值更新
