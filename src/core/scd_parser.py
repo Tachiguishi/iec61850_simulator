@@ -20,7 +20,11 @@ from xml.etree import ElementTree as ET
 from pathlib import Path
 from typing import List, Optional, Any
 
-from .data_model import IED, AccessPoint, LogicalDevice, LogicalNode, DataObject, DataAttribute, DataType, FunctionalConstraint
+from .data_model import (
+	IED, AccessPoint, LogicalDevice, LogicalNode, DataObject, DataAttribute, 
+	DataType, FunctionalConstraint, DataSet, ReportControl, GSEControl, 
+	SampledValueControl, LogControl
+)
 from loguru import logger
 
 class SCDParser:
@@ -168,6 +172,36 @@ class SCDParser:
 			# 解析 DOI (Data Object Instance) - 包含实例化描述和初始值
 			for doi_elem in self._findall_elements(ln_elem, 'DOI'):
 				self._apply_doi_to_data_object(doi_elem, ln)
+			
+			# 解析 DataSet
+			for dataset_elem in self._findall_elements(ln_elem, 'DataSet'):
+				ds = self._parse_data_set(dataset_elem)
+				if ds:
+					ln.data_sets[ds.name] = ds
+			
+			# 解析 ReportControl
+			for rc_elem in self._findall_elements(ln_elem, 'ReportControl'):
+				rc = self._parse_report_control(rc_elem)
+				if rc:
+					ln.report_controls[rc.name] = rc
+			
+			# 解析 GSEControl
+			for gse_elem in self._findall_elements(ln_elem, 'GSEControl'):
+				gse = self._parse_gse_control(gse_elem)
+				if gse:
+					ln.gse_controls[gse.name] = gse
+			
+			# 解析 SampledValueControl
+			for smv_elem in self._findall_elements(ln_elem, 'SampledValueControl'):
+				smv = self._parse_sampled_value_control(smv_elem)
+				if smv:
+					ln.smv_controls[smv.name] = smv
+			
+			# 解析 LogControl
+			for log_elem in self._findall_elements(ln_elem, 'LogControl'):
+				log = self._parse_log_control(log_elem)
+				if log:
+					ln.log_controls[log.name] = log
 			
 			return ln
 			
@@ -476,6 +510,231 @@ class SCDParser:
 		except (ValueError, TypeError) as e:
 			logger.warning(f"Value conversion failed for '{value_str} to {data_type}': {e}")
 			return value_str
+
+	def _parse_data_set(self, dataset_elem: ET.Element) -> Optional[DataSet]:
+		"""
+		解析 DataSet 元素
+		
+		Args:
+			dataset_elem: DataSet XML 元素
+			
+		Returns:
+			DataSet 对象或 None
+		"""
+		try:
+			ds_name = dataset_elem.get('name', '')
+			if not ds_name:
+				return None
+			
+			ds = DataSet(
+				name=ds_name,
+				description=dataset_elem.get('desc', '')
+			)
+			
+			# 解析 FCDA (Functional Constrained Data Attribute)
+			for fcda_elem in self._findall_elements(dataset_elem, 'FCDA'):
+				fcda_info = {
+					'ldInst': fcda_elem.get('ldInst', ''),
+					'lnClass': fcda_elem.get('lnClass', ''),
+					'lnInst': fcda_elem.get('lnInst', ''),
+					'doName': fcda_elem.get('doName', ''),
+					'daName': fcda_elem.get('daName', ''),
+					'fc': fcda_elem.get('fc', ''),
+				}
+				ds.add_fcda(fcda_info)
+			
+			return ds
+			
+		except Exception as e:
+			logger.error(f"Failed to parse DataSet: {e}")
+			return None
+	
+	def _parse_report_control(self, rc_elem: ET.Element) -> Optional[ReportControl]:
+		"""
+		解析 ReportControl 元素
+		
+		Args:
+			rc_elem: ReportControl XML 元素
+			
+		Returns:
+			ReportControl 对象或 None
+		"""
+		try:
+			rc_name = rc_elem.get('name', '')
+			if not rc_name:
+				return None
+			
+			rc = ReportControl(
+				name=rc_name,
+				description=rc_elem.get('desc', ''),
+				buffered=rc_elem.get('buffered', 'false').lower() == 'true',
+				dataset=rc_elem.get('datSet', ''),
+				rptid=rc_elem.get('rptID', ''),
+				buf_time=int(rc_elem.get('bufTm', '0')),
+				intg_pd=int(rc_elem.get('intgPd', '0')),
+			)
+			
+			# 解析 RptEnabled 和其他选项
+			rep_enabled_elem = self._find_element(rc_elem, 'RptEnabled')
+			if rep_enabled_elem is not None:
+				rc.options['rptEnabled'] = rep_enabled_elem.get('max', '1')
+			
+			# 解析 OptFields
+			opt_fields_elem = self._find_element(rc_elem, 'OptFields')
+			if opt_fields_elem is not None:
+				rc.options['seqNum'] = opt_fields_elem.get('seqNum', 'false').lower() == 'true'
+				rc.options['timeStamp'] = opt_fields_elem.get('timeStamp', 'false').lower() == 'true'
+				rc.options['dataSet'] = opt_fields_elem.get('dataSet', 'false').lower() == 'true'
+				rc.options['reasonForInclusion'] = opt_fields_elem.get('reasonForInclusion', 'false').lower() == 'true'
+				rc.options['configRevision'] = opt_fields_elem.get('configRevision', 'false').lower() == 'true'
+				rc.options['bufferOverflow'] = opt_fields_elem.get('bufOvfl', 'false').lower() == 'true'
+			
+			# 解析 TrgOps (触发选项)
+			trg_ops_elem = self._find_element(rc_elem, 'TrgOps')
+			if trg_ops_elem is not None:
+				rc.options['dataChange'] = trg_ops_elem.get('dchg', 'false').lower() == 'true'
+				rc.options['qualityChange'] = trg_ops_elem.get('qchg', 'false').lower() == 'true'
+				rc.options['dataUpdate'] = trg_ops_elem.get('dupd', 'false').lower() == 'true'
+				rc.options['integrityCheck'] = trg_ops_elem.get('period', 'false').lower() == 'true'
+			
+			return rc
+			
+		except Exception as e:
+			logger.error(f"Failed to parse ReportControl: {e}")
+			return None
+	
+	def _parse_gse_control(self, gse_elem: ET.Element) -> Optional[GSEControl]:
+		"""
+		解析 GSEControl 元素
+		
+		Args:
+			gse_elem: GSEControl XML 元素
+			
+		Returns:
+			GSEControl 对象或 None
+		"""
+		try:
+			gse_name = gse_elem.get('name', '')
+			if not gse_name:
+				return None
+			
+			gse = GSEControl(
+				name=gse_name,
+				description=gse_elem.get('desc', ''),
+				dataset=gse_elem.get('datSet', ''),
+				gocbname=gse_elem.get('gocbName', ''),
+				time_allowed_to_live=int(gse_elem.get('timeAllowedToLive', '0')),
+			)
+			
+			# 解析 IEDName 和 ApName
+			gse.options['iedName'] = gse_elem.get('iedName', '')
+			gse.options['apName'] = gse_elem.get('apName', '')
+			
+			return gse
+			
+		except Exception as e:
+			logger.error(f"Failed to parse GSEControl: {e}")
+			return None
+	
+	def _parse_sampled_value_control(self, smv_elem: ET.Element) -> Optional[SampledValueControl]:
+		"""
+		解析 SampledValueControl 元素
+		
+		Args:
+			smv_elem: SampledValueControl XML 元素
+			
+		Returns:
+			SampledValueControl 对象或 None
+		"""
+		try:
+			smv_name = smv_elem.get('name', '')
+			if not smv_name:
+				return None
+			
+			# 解析采样模式
+			smpmod = smv_elem.get('smpMod', 'SmpPerPeriod')  # SmpPerPeriod 或 SmpPerSec
+			
+			smv = SampledValueControl(
+				name=smv_name,
+				description=smv_elem.get('desc', ''),
+				dataset=smv_elem.get('datSet', ''),
+				smvcbname=smv_elem.get('smvCBName', ''),
+				smprate=int(smv_elem.get('smpRate', '0')),
+				smpmod=smpmod,
+			)
+			
+			# 解析 IEDName 和 ApName
+			smv.options['iedName'] = smv_elem.get('iedName', '')
+			smv.options['apName'] = smv_elem.get('apName', '')
+			
+			# 解析 OptFields
+			opt_fields_elem = self._find_element(smv_elem, 'OptFields')
+			if opt_fields_elem is not None:
+				smv.options['sampleSync'] = opt_fields_elem.get('sampleSync', 'false').lower() == 'true'
+				smv.options['sampleRate'] = opt_fields_elem.get('sampleRate', 'false').lower() == 'true'
+				smv.options['security'] = opt_fields_elem.get('security', 'false').lower() == 'true'
+				smv.options['timestamp'] = opt_fields_elem.get('timestamp', 'false').lower() == 'true'
+				smv.options['syncSourceId'] = opt_fields_elem.get('syncSourceId', 'false').lower() == 'true'
+			
+			return smv
+			
+		except Exception as e:
+			logger.error(f"Failed to parse SampledValueControl: {e}")
+			return None
+	
+	def _parse_log_control(self, log_elem: ET.Element) -> Optional[LogControl]:
+		"""
+		解析 LogControl 元素
+		
+		Args:
+			log_elem: LogControl XML 元素
+			
+		Returns:
+			LogControl 对象或 None
+		"""
+		try:
+			log_name = log_elem.get('name', '')
+			if not log_name:
+				return None
+			
+			# 解析 logEna - 是否启用日志
+			log_ena_elem = self._find_element(log_elem, 'LogEna')
+			log_ena = False
+			if log_ena_elem is not None:
+				log_ena = log_ena_elem.get('value', 'false').lower() == 'true'
+			
+			log = LogControl(
+				name=log_name,
+				description=log_elem.get('desc', ''),
+				dataset=log_elem.get('datSet', ''),
+				logname=log_elem.get('logName', ''),
+				log_ena=log_ena,
+				intg_pd=int(log_elem.get('intgPd', '0')),
+			)
+			
+			# 解析 OptFields
+			opt_fields_elem = self._find_element(log_elem, 'OptFields')
+			if opt_fields_elem is not None:
+				log.options['seqNum'] = opt_fields_elem.get('seqNum', 'false').lower() == 'true'
+				log.options['timeStamp'] = opt_fields_elem.get('timeStamp', 'false').lower() == 'true'
+				log.options['dataSet'] = opt_fields_elem.get('dataSet', 'false').lower() == 'true'
+				log.options['reasonForInclusion'] = opt_fields_elem.get('reasonForInclusion', 'false').lower() == 'true'
+				log.options['configRevision'] = opt_fields_elem.get('configRevision', 'false').lower() == 'true'
+				log.options['bufferOverflow'] = opt_fields_elem.get('bufOvfl', 'false').lower() == 'true'
+			
+			# 解析 TrgOps (触发选项)
+			trg_ops_elem = self._find_element(log_elem, 'TrgOps')
+			if trg_ops_elem is not None:
+				log.options['dataChange'] = trg_ops_elem.get('dchg', 'false').lower() == 'true'
+				log.options['qualityChange'] = trg_ops_elem.get('qchg', 'false').lower() == 'true'
+				log.options['dataUpdate'] = trg_ops_elem.get('dupd', 'false').lower() == 'true'
+				log.options['integrityCheck'] = trg_ops_elem.get('period', 'false').lower() == 'true'
+			
+			return log
+			
+		except Exception as e:
+			logger.error(f"Failed to parse LogControl: {e}")
+			return None
 
 	def _find_element(self, parent: ET.Element, local_name: str) -> Optional[ET.Element]:
 		"""

@@ -15,6 +15,7 @@ IEC61850 Data Model Implementation
 
 from __future__ import annotations
 
+from sys import prefix
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -441,6 +442,11 @@ class LogicalNode(IEC61850Element):
 	ln_inst: str = ""  # 实例标识符，如 "1" 在 "PTOC1"
 	ln_type: str = ""  # LN类型标识符
 	data_objects: Dict[str, DataObject] = field(default_factory=dict)
+	data_sets: Dict[str, 'DataSet'] = field(default_factory=dict)  # 数据集
+	report_controls: Dict[str, 'ReportControl'] = field(default_factory=dict)  # 报告控制块
+	gse_controls: Dict[str, 'GSEControl'] = field(default_factory=dict)  # GSE控制块
+	smv_controls: Dict[str, 'SampledValueControl'] = field(default_factory=dict)  # 采样值控制块
+	log_controls: Dict[str, 'LogControl'] = field(default_factory=dict)  # 日志控制块
 	
 	def _get_separator(self) -> str:
 		"""LogicalNode 使用 '/' 作为分隔符"""
@@ -470,12 +476,176 @@ class LogicalNode(IEC61850Element):
 			"class": self.ln_class,
 			"description": self.description,
 			"data_objects": {k: v.to_dict() for k, v in self.data_objects.items()},
+			"data_sets": {k: v.to_dict() for k, v in self.data_sets.items()},
+			"report_controls": {k: v.to_dict() for k, v in self.report_controls.items()},
+			"gse_controls": {k: v.to_dict() for k, v in self.gse_controls.items()},
+			"smv_controls": {k: v.to_dict() for k, v in self.smv_controls.items()},
+			"log_controls": {k: v.to_dict() for k, v in self.log_controls.items()},
 		}
 
 
 # ============================================================================
-# 逻辑设备 (Logical Device)
+# 数据集和控制块 (DataSet and Control Blocks)
 # ============================================================================
+
+@dataclass
+class DataSet(IEC61850Element):
+	"""
+	数据集 - 用于报告或采样值的相关数据属性集合
+	
+	Attributes:
+		name: 数据集名称
+		fcdas: FCDA (Functional Constrained Data Attribute) 列表
+	"""
+	fcdas: List[Dict[str, str]] = field(default_factory=list)  # FCDA列表，每个FCDA包含ldInst, lnClass, lnInst, doName, daName等
+	
+	def add_fcda(self, fcda_info: Dict[str, str]):
+		"""添加 FCDA"""
+		self.fcdas.append(fcda_info)
+
+	def get_fcdaReferences(self) -> List[str]:
+		"""获取 FCDA 的完整引用路径列表"""
+		references = []
+		for fcda in self.fcdas:
+			prefix = fcda.get("prefix", "")
+			ld_inst = fcda.get("ldInst", "")
+			ln_class = fcda.get("lnClass", "")
+			ln_inst = fcda.get("lnInst", "")
+			do_name = fcda.get("doName", "")
+			da_name = fcda.get("daName", "")
+			ref = f"{ld_inst}/{prefix}{ln_class}{ln_inst}.{do_name}.{da_name}"
+			references.append(ref)
+		return references
+	
+	def to_dict(self) -> Dict:
+		return {
+			"name": self.name,
+			"description": self.description,
+			"fcdas": self.get_fcdaReferences(),
+		}
+
+
+@dataclass
+class ReportControl(IEC61850Element):
+	"""
+	报告控制块 - 用于配置报告的生成和传输
+	
+	Attributes:
+		name: 报告控制块名称
+		dataset: 所关联的数据集名称
+		rptid: 报告ID
+		buf_time: 缓冲时间（ms）
+		intg_pd: 完整性周期（ms）
+		options: 报告选项（trigger, data_change, quality_change, buf_overflow, seq_num, time_stamp, reason_for_inclusion)
+	"""
+	buffered: bool = False  # 是否启用缓冲
+	dataset: str = ""  # 关联的数据集名称
+	rptid: str = ""  # 报告ID
+	buf_time: int = 0  # 缓冲时间
+	intg_pd: int = 0  # 完整性周期
+	options: Dict[str, bool] = field(default_factory=dict)  # 报告选项
+	
+	def to_dict(self) -> Dict:
+		return {
+			"name": self.name,
+			"description": self.description,
+			"buffered": self.buffered,
+			"dataset": self.dataset,
+			"rptid": self.rptid,
+			"buf_time": self.buf_time,
+			"intg_pd": self.intg_pd,
+			"options": self.options,
+		}
+
+
+@dataclass
+class GSEControl(IEC61850Element):
+	"""
+	GSE 控制块 - 用于配置 Generic Substation Event (GSE) 的生成和传输
+	
+	Attributes:
+		name: GSE控制块名称
+		dataset: 所关联的数据集名称
+		gocbname: GSE控制块名称
+		timeAllowedtoLive: 允许存活时间
+		"""
+	dataset: str = ""  # 关联的数据集名称
+	gocbname: str = ""  # GSE控制块名称
+	time_allowed_to_live: int = 0  # 允许存活时间
+	options: Dict[str, bool] = field(default_factory=dict)  # GSE选项
+	
+	def to_dict(self) -> Dict:
+		return {
+			"name": self.name,
+			"description": self.description,
+			"dataset": self.dataset,
+			"gocbname": self.gocbname,
+			"time_allowed_to_live": self.time_allowed_to_live,
+			"options": self.options,
+		}
+
+
+@dataclass
+class SampledValueControl(IEC61850Element):
+	"""
+	采样值控制块 - 用于配置采样值的生成和传输
+	
+	Attributes:
+		name: 采样值控制块名称
+		dataset: 所关联的数据集名称
+		smvcbname: 采样值控制块名称
+		smprate: 采样率
+		smpmod: 采样模式
+		"""
+	dataset: str = ""  # 关联的数据集名称
+	smvcbname: str = ""  # 采样值控制块名称
+	smprate: int = 0  # 采样率
+	smpmod: str = ""  # 采样模式（SmpPerPeriod, SmpPerSec）
+	options: Dict[str, bool] = field(default_factory=dict)  # 采样值选项
+	
+	def to_dict(self) -> Dict:
+		return {
+			"name": self.name,
+			"description": self.description,
+			"dataset": self.dataset,
+			"smvcbname": self.smvcbname,
+			"smprate": self.smprate,
+			"smpmod": self.smpmod,
+			"options": self.options,
+		}
+
+
+@dataclass
+class LogControl(IEC61850Element):
+	"""
+	日志控制块 - 用于配置日志的记录
+	
+	Attributes:
+		name: 日志控制块名称
+		dataset: 所关联的数据集名称
+		logname: 日志名称
+		logEna: 是否启用日志
+		intgPd: 完整性周期
+		"""
+	dataset: str = ""  # 关联的数据集名称
+	logname: str = ""  # 日志名称
+	log_ena: bool = False  # 是否启用日志
+	intg_pd: int = 0  # 完整性周期
+	options: Dict[str, bool] = field(default_factory=dict)  # 日志选项
+	
+	def to_dict(self) -> Dict:
+		return {
+			"name": self.name,
+			"description": self.description,
+			"dataset": self.dataset,
+			"logname": self.logname,
+			"log_ena": self.log_ena,
+			"intg_pd": self.intg_pd,
+			"options": self.options,
+		}
+
+
+
 
 @dataclass
 class LogicalDevice(IEC61850Element):
