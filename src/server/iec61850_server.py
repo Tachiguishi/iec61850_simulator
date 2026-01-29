@@ -124,6 +124,7 @@ class IEC61850Server:
         # pyiec61850 对象
         self._ied_model = None
         self._ied_server = None
+        self._server_config = None
         self._model_nodes: Dict[str, Any] = {}  # 存储数据属性节点引用
         
         # 客户端跟踪
@@ -168,30 +169,11 @@ class IEC61850Server:
             self._set_state(ServerState.STARTING)
             self._stop_event.clear()
 
-            # 创建服务器配置
-            server_config = iec61850.IedServerConfig_create()
-            iec61850.IedServerConfig_setMaxMmsConnections(server_config, self.config.max_connections)
-            iec61850.IedServerConfig_setEdition(server_config, iec61850.IEC_61850_EDITION_2)
-            
-            # 创建并启动服务器
-            self._ied_server = iec61850.IedServer_createWithConfig(
-                self._ied_model, None, server_config
-            )
-            
-            # 设置服务器标识
-            if self.ied:
-                iec61850.IedServer_setServerIdentity(
-                    self._ied_server,
-                    self.ied.manufacturer or "IEC61850 Simulator",
-                    self.ied.model or "Virtual IED",
-                    self.ied.revision or "1.0.0"
-                )
-            
             # 启动服务器
             iec61850.IedServer_start(self._ied_server, self.config.port)
             
             if not iec61850.IedServer_isRunning(self._ied_server):
-                raise Exception("Failed to start IED server")
+                raise Exception(f"Failed to start IED server on port {self.config.port}")
             
             # 启动数据更新线程
             self._update_thread = threading.Thread(
@@ -200,9 +182,6 @@ class IEC61850Server:
                 daemon=True
             )
             self._update_thread.start()
-            
-            # 清理配置对象
-            iec61850.IedServerConfig_destroy(server_config)
             
             self._set_state(ServerState.RUNNING)
             self._log("info", f"Server started on port {self.config.port}")
@@ -253,7 +232,14 @@ class IEC61850Server:
             except Exception as e:
                 logger.error(f"Error destroying server: {e}")
             self._ied_server = None
-        
+
+        if self._server_config:
+            try:
+                iec61850.IedServerConfig_destroy(self._server_config)
+            except Exception as e:
+                logger.error(f"Error destroying server config: {e}")
+            self._server_config = None
+
         if self._ied_model:
             try:
                 iec61850.IedModel_destroy(self._ied_model)
@@ -275,8 +261,13 @@ class IEC61850Server:
     # ========================================================================
     def load_model(self, ied: IED):
         """加载IED数据模型"""
-        self.ied = ied
-        self._create_ied_model()
+        try:
+            self.ied = ied
+            self._create_ied_model()
+            self._create_iec61850_server()
+        except Exception as e:
+            self._log("error", f"Failed to load {ied.name} model: {e}")
+            raise e
 
     def _create_ied_model(self):
         """从Python数据模型创建pyiec61850 IED模型"""
@@ -290,7 +281,25 @@ class IEC61850Server:
         for ap_name, ap in self.ied.access_points.items():
             for ld_name, ld in ap.logical_devices.items():
                 self._create_logical_device(ld)
-    
+
+    def _create_iec61850_server(self):
+        # 创建服务器配置
+        self._server_config = iec61850.IedServerConfig_create()
+        iec61850.IedServerConfig_setMaxMmsConnections(self._server_config, self.config.max_connections)
+        iec61850.IedServerConfig_setEdition(self._server_config, iec61850.IEC_61850_EDITION_2)
+        
+        # 创建并启动服务器
+        self._ied_server = iec61850.IedServer_create(self._ied_model)
+
+        # 设置服务器标识
+        if self.ied:
+            iec61850.IedServer_setServerIdentity(
+                self._ied_server,
+                self.ied.manufacturer or "IEC61850 Simulator",
+                self.ied.model or "Virtual IED",
+                self.ied.revision or "1.0.0"
+            )
+
     def _create_logical_device(self, ld: LogicalDevice):
         """创建逻辑设备"""
         # 创建LD

@@ -224,13 +224,16 @@ class ServerPanel(QWidget):
         if file_path:
             ieds = self.data_model_manager.load_from_scd(file_path)
             if ieds:
-                if self.server:
-                    self.server.load_model(ieds[1])
-                self.modelInfoLabel.setText(f"已加载: {ieds[1].name}")
-                self._update_data_tree()
-                self.log_message.emit("info", f"已加载IED: {ieds[1].name}")
+                try:
+                    if self.server:
+                        self.server.load_model(ieds[1])
+                    self.modelInfoLabel.setText(f"已加载: {ieds[1].name}")
+                    self._update_data_tree()
+                    self.log_message.emit("info", f"已加载IED: {ieds[1].name}")
+                except Exception as e:
+                    QMessageBox.critical(self, "错误", f"加载数据模型失败: {e}")
             else:
-                QMessageBox.critical(self, "错误", "加载数据模型失败")
+                QMessageBox.critical(self, "错误", "解析数据模型失败")
     
     def _update_data_tree(self):
         self._update_dataset_list()
