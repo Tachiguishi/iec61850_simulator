@@ -23,7 +23,7 @@ from typing import List, Optional, Any
 from .data_model import (
 	IED, AccessPoint, LogicalDevice, LogicalNode, DataObject, DataAttribute, 
 	DataType, FunctionalConstraint, DataSet, ReportControl, GSEControl, 
-	SampledValueControl, LogControl
+	SampledValueControl, LogControl, SettingGroupControl
 )
 from loguru import logger
 
@@ -202,6 +202,13 @@ class SCDParser:
 				log = self._parse_log_control(log_elem)
 				if log:
 					ln.log_controls[log.name] = log
+
+			# 解析 SettingGroupControl
+			sg_elem = self._find_element(ln_elem, 'SettingGroupControl')
+			if sg_elem is not None:
+				sg = self._parse_setting_group_control(sg_elem)
+				if sg:
+					ln.setting_group_control = sg
 			
 			return ln
 			
@@ -734,6 +741,53 @@ class SCDParser:
 			
 		except Exception as e:
 			logger.error(f"Failed to parse LogControl: {e}")
+			return None
+
+	def _parse_setting_group_control(self, sg_elem: ET.Element) -> Optional[SettingGroupControl]:
+		"""
+		解析 SettingGroupControl 元素
+		
+		Args:
+			sg_elem: SettingGroupControl XML 元素
+			
+		Returns:
+			SettingGroupControl 对象或 None
+		"""
+		try:
+			name = sg_elem.get('name', 'SGCB')
+			act_sg = sg_elem.get('actSG')
+			num_of_sgs = sg_elem.get('numOfSGs')
+
+			# 兼容子元素形式
+			if act_sg is None:
+				act_elem = self._find_element(sg_elem, 'ActSG')
+				if act_elem is not None:
+					act_sg = act_elem.get('value')
+
+			if num_of_sgs is None:
+				num_elem = self._find_element(sg_elem, 'NumOfSGs')
+				if num_elem is not None:
+					num_of_sgs = num_elem.get('value')
+
+			act_sg_val = int(act_sg) if act_sg is not None else 1
+			num_of_sgs_val = int(num_of_sgs) if num_of_sgs is not None else 1
+
+			sg = SettingGroupControl(
+				name=name,
+				description=sg_elem.get('desc', ''),
+				act_sg=act_sg_val,
+				num_of_sgs=num_of_sgs_val,
+			)
+
+			# 可选扩展字段
+			edit_sg = sg_elem.get('editSG')
+			if edit_sg is not None:
+				sg.options['editSG'] = int(edit_sg)
+
+			return sg
+
+		except Exception as e:
+			logger.error(f"Failed to parse SettingGroupControl: {e}")
 			return None
 
 	def _find_element(self, parent: ET.Element, local_name: str) -> Optional[ET.Element]:

@@ -447,6 +447,7 @@ class LogicalNode(IEC61850Element):
 	gse_controls: Dict[str, 'GSEControl'] = field(default_factory=dict)  # GSE控制块
 	smv_controls: Dict[str, 'SampledValueControl'] = field(default_factory=dict)  # 采样值控制块
 	log_controls: Dict[str, 'LogControl'] = field(default_factory=dict)  # 日志控制块
+	setting_group_control: Optional['SettingGroupControl'] = None  # 定值组控制
 	
 	def _get_separator(self) -> str:
 		"""LogicalNode 使用 '/' 作为分隔符"""
@@ -481,6 +482,7 @@ class LogicalNode(IEC61850Element):
 			"gse_controls": {k: v.to_dict() for k, v in self.gse_controls.items()},
 			"smv_controls": {k: v.to_dict() for k, v in self.smv_controls.items()},
 			"log_controls": {k: v.to_dict() for k, v in self.log_controls.items()},
+			"setting_group_control": self.setting_group_control.to_dict() if self.setting_group_control else None,
 		}
 
 
@@ -611,6 +613,31 @@ class SampledValueControl(IEC61850Element):
 			"smvcbname": self.smvcbname,
 			"smprate": self.smprate,
 			"smpmod": self.smpmod,
+			"options": self.options,
+		}
+
+
+@dataclass
+class SettingGroupControl(IEC61850Element):
+	"""
+	定值组控制块 - 用于配置 Setting Group
+	
+	Attributes:
+		name: 控制块名称
+		act_sg: 当前激活定值组
+		num_of_sgs: 定值组数量
+		options: 其他扩展选项
+	"""
+	act_sg: int = 1
+	num_of_sgs: int = 1
+	options: Dict[str, Any] = field(default_factory=dict)
+
+	def to_dict(self) -> Dict:
+		return {
+			"name": self.name,
+			"description": self.description,
+			"act_sg": self.act_sg,
+			"num_of_sgs": self.num_of_sgs,
 			"options": self.options,
 		}
 

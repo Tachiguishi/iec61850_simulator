@@ -16,13 +16,13 @@ pushd "src/libiec61850"
 # 	wget https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.6.0.tar.gz && tar xzf v3.6.0.tar.gz
 # fi
 # popd
+#  -DCONFIG_EXTERNAL_MBEDTLS_INCLUDE_PATH=/usr/include \
+#  -DCONFIG_EXTERNAL_MBEDTLS_DYNLIB_PATH=/usr/lib64 \
 
 mkdir -p build && cd build
 cmake -DBUILD_EXAMPLES=OFF \
 	 -DBUILD_PYTHON_BINDINGS=ON \
 	 -DCONFIG_USE_EXTERNAL_MBEDTLS_DYNLIB=OFF \
-	#  -DCONFIG_EXTERNAL_MBEDTLS_INCLUDE_PATH=/usr/include \
-	#  -DCONFIG_EXTERNAL_MBEDTLS_DYNLIB_PATH=/usr/lib64 \
 	 .. && make
 cp -P src/libiec61850.so* "$PROJECT_HOME/lib/"
 cp pyiec61850/*pyiec61850.* "$PYTHON_SITE_PACKAGES_DIR/"

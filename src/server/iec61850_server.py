@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.data_model import (
     IED, LogicalDevice, LogicalNode, DataObject, DataAttribute,
+    DataSet, ReportControl, GSEControl, SampledValueControl, LogControl, SettingGroupControl,
     DataType, Quality, FunctionalConstraint
 )
 from core.data_model_manager import DataModelManager
@@ -306,27 +307,47 @@ class IEC61850Server:
         # 创建数据对象
         for do_name, do in ln.data_objects.items():
             self._create_data_object(do, iec61850.toModelNode(ln_node), ld_name, ln.name)
+
+        # 创建数据集
+        for ds in ln.data_sets.values():
+            self._create_data_set(ds, ln_node, ld_name, ln.name)
+
+        # 创建控制块与日志
+        for rc in ln.report_controls.values():
+            self._create_report_control(rc, ln_node)
+        for gse in ln.gse_controls.values():
+            self._create_gse_control(gse, ln_node)
+        for smv in ln.smv_controls.values():
+            self._create_smv_control(smv, ln_node)
+        for log in ln.log_controls.values():
+            self._create_log_control(log, ln_node)
+        if ln.setting_group_control:
+            self._create_setting_group_control(ln.setting_group_control, ln_node)
     
-    def _create_data_object(self, do: DataObject, parent_node, ld_name: str, ln_name: str):
+    def _create_data_object(self, do: DataObject, parent_node, ld_name: str, ln_name: str, do_path: Optional[str] = None):
         """创建数据对象"""
         do_node = iec61850.DataObject_create(do.name, parent_node, 0)
+        current_do_path = f"{ln_name}.{do.name}" if do_path is None else f"{do_path}.{do.name}"
         
-        # 创建数据属性
-        for da_name, da in do.attributes.items():
-            self._create_data_attribute(da, iec61850.toModelNode(do_node), ld_name, ln_name, do.name)
+        # 创建数据属性或子数据对象
+        for child in do.attributes.values():
+            if isinstance(child, DataObject):
+                self._create_data_object(child, iec61850.toModelNode(do_node), ld_name, ln_name, current_do_path)
+            else:
+                self._create_data_attribute(child, iec61850.toModelNode(do_node), ld_name, current_do_path)
     
-    def _create_data_attribute(self, da: DataAttribute, parent_node, ld_name: str, ln_name: str, do_name: str):
+    def _create_data_attribute(self, da: DataAttribute, parent_node, ld_name: str, do_path: str, da_path: Optional[str] = None):
         """创建数据属性"""
         # 映射数据类型
         da_type = self._map_data_type(da.data_type)
+        if da.attributes:
+            da_type = iec61850.IEC61850_CONSTRUCTED
         
         # 映射功能约束
         fc = self._map_fc(da.fc)
         
         # 触发选项
-        trigger_options = 0
-        if da.data_type != DataType.QUALITY:
-            trigger_options = iec61850.TRG_OPT_DATA_CHANGED | iec61850.TRG_OPT_DATA_UPDATE
+        trigger_options = self._map_trigger_options(da.trigger_options, da.data_type)
         
         # 创建属性
         da_node = iec61850.DataAttribute_create(
@@ -340,16 +361,244 @@ class IEC61850Server:
         )
         
         # 存储节点引用用于后续值更新
-        ref = f"{ld_name}/{ln_name}.{do_name}.{da.name}"
+        current_da_path = da.name if da_path is None else f"{da_path}.{da.name}"
+        ref = f"{ld_name}/{do_path}.{current_da_path}"
         self._model_nodes[ref] = da_node
         
         # 设置初始值
         if da.value is not None:
             self._set_initial_value(da_node, da.value, da_type)
+
+        # 递归创建子属性（结构体）
+        if da.attributes:
+            for sub_attr in da.attributes.values():
+                self._create_data_attribute(
+                    sub_attr,
+                    iec61850.toModelNode(da_node),
+                    ld_name,
+                    do_path,
+                    current_da_path,
+                )
+
+    def _create_data_set(self, ds: DataSet, ln_node, ld_name: str, ln_name: str):
+        """创建数据集"""
+        data_set = iec61850.DataSet_create(ds.name, ln_node)
+
+        for fcda in ds.fcdas:
+            variable = self._build_dataset_variable(fcda, ld_name, ln_name)
+            if not variable:
+                continue
+            try:
+                iec61850.DataSetEntry_create(data_set, variable, -1, None)
+            except Exception as e:
+                logger.debug(f"Failed to add DataSetEntry {variable}: {e}")
+
+    def _create_report_control(self, rc: ReportControl, ln_node):
+        """创建报告控制块"""
+        options = self._build_report_options(rc.options)
+        trg_ops = self._build_trigger_ops(rc.options)
+        rpt_id = rc.rptid if rc.rptid else None
+        data_set_name = rc.dataset if rc.dataset else None
+        try:
+            iec61850.ReportControlBlock_create(
+                rc.name,
+                ln_node,
+                rpt_id,
+                bool(rc.buffered),
+                data_set_name,
+                1,
+                trg_ops,
+                options,
+                int(rc.buf_time),
+                int(rc.intg_pd),
+            )
+        except Exception as e:
+            logger.debug(f"Failed to create ReportControlBlock {rc.name}: {e}")
+
+    def _create_gse_control(self, gse: GSEControl, ln_node):
+        """创建 GSE 控制块"""
+        app_id = gse.gocbname or gse.name
+        data_set_name = gse.dataset if gse.dataset else None
+        conf_rev = 1
+        fixed_offs = False
+        min_time = 0
+        max_time = int(gse.time_allowed_to_live) if gse.time_allowed_to_live else 0
+        try:
+            iec61850.GSEControlBlock_create(
+                gse.name,
+                ln_node,
+                app_id,
+                data_set_name,
+                conf_rev,
+                fixed_offs,
+                min_time,
+                max_time,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to create GSEControlBlock {gse.name}: {e}")
+
+    def _create_smv_control(self, smv: SampledValueControl, ln_node):
+        """创建采样值控制块"""
+        sv_id = smv.smvcbname or smv.name
+        data_set_name = smv.dataset if smv.dataset else None
+        conf_rev = 1
+        smp_mod = self._map_smp_mode(smv.smpmod)
+        opt_flds = self._build_smv_options(smv.options)
+        is_unicast = False
+        try:
+            iec61850.SVControlBlock_create(
+                smv.name,
+                ln_node,
+                sv_id,
+                data_set_name,
+                conf_rev,
+                smp_mod,
+                int(smv.smprate),
+                opt_flds,
+                bool(is_unicast),
+            )
+        except Exception as e:
+            logger.debug(f"Failed to create SVControlBlock {smv.name}: {e}")
+
+    def _create_log_control(self, log: LogControl, ln_node):
+        """创建日志控制块"""
+        data_set_name = log.dataset if log.dataset else None
+        log_ref = log.logname if log.logname else None
+        trg_ops = self._build_trigger_ops(log.options)
+        reason_code = bool(log.options.get("reasonForInclusion", False))
+
+        if log_ref:
+            try:
+                iec61850.Log_create(log_ref, ln_node)
+            except Exception as e:
+                logger.debug(f"Failed to create Log {log_ref}: {e}")
+
+        try:
+            iec61850.LogControlBlock_create(
+                log.name,
+                ln_node,
+                data_set_name,
+                log_ref,
+                trg_ops,
+                int(log.intg_pd),
+                bool(log.log_ena),
+                bool(reason_code),
+            )
+        except Exception as e:
+            logger.debug(f"Failed to create LogControlBlock {log.name}: {e}")
+
+    def _create_setting_group_control(self, sg: SettingGroupControl, ln_node):
+        """创建定值组控制块"""
+        try:
+            iec61850.SettingGroupControlBlock_create(
+                ln_node,
+                int(sg.act_sg),
+                int(sg.num_of_sgs),
+            )
+        except Exception as e:
+            logger.debug(f"Failed to create SettingGroupControlBlock {sg.name}: {e}")
+
+    def _map_trigger_options(self, trigger_options: int, data_type: DataType) -> int:
+        """映射触发选项"""
+        if data_type == DataType.QUALITY:
+            return 0
+
+        trg = 0
+        if trigger_options & 1:
+            trg |= iec61850.TRG_OPT_DATA_CHANGED
+        if trigger_options & 2:
+            trg |= iec61850.TRG_OPT_QUALITY_CHANGED
+        if trigger_options & 4:
+            trg |= iec61850.TRG_OPT_DATA_UPDATE
+        if trigger_options & 8:
+            trg |= iec61850.TRG_OPT_INTEGRITY
+        if trigger_options & 16:
+            trg |= iec61850.TRG_OPT_GI
+        return trg
+
+    def _build_report_options(self, options: Dict[str, bool]) -> int:
+        """构建报告控制块选项位"""
+        opt = 0
+        if options.get("seqNum"):
+            opt |= iec61850.RPT_OPT_SEQ_NUM
+        if options.get("timeStamp"):
+            opt |= iec61850.RPT_OPT_TIME_STAMP
+        if options.get("dataSet"):
+            opt |= iec61850.RPT_OPT_DATA_SET
+        if options.get("reasonForInclusion"):
+            opt |= iec61850.RPT_OPT_REASON_FOR_INCLUSION
+        if options.get("configRevision"):
+            opt |= iec61850.RPT_OPT_CONF_REV
+        if options.get("bufferOverflow"):
+            opt |= iec61850.RPT_OPT_BUFFER_OVERFLOW
+        return opt
+
+    def _build_trigger_ops(self, options: Dict[str, bool]) -> int:
+        """构建触发选项位"""
+        trg = 0
+        if options.get("dataChange"):
+            trg |= iec61850.TRG_OPT_DATA_CHANGED
+        if options.get("qualityChange"):
+            trg |= iec61850.TRG_OPT_QUALITY_CHANGED
+        if options.get("dataUpdate"):
+            trg |= iec61850.TRG_OPT_DATA_UPDATE
+        if options.get("integrityCheck"):
+            trg |= iec61850.TRG_OPT_INTEGRITY
+        return trg
+
+    def _build_dataset_variable(self, fcda: Dict[str, str], ld_name: str, ln_name: str) -> Optional[str]:
+        """构建 DataSetEntry 变量引用"""
+        prefix = fcda.get("prefix", "")
+        ld_inst = fcda.get("ldInst", "")
+        ln_class = fcda.get("lnClass", "")
+        ln_inst = fcda.get("lnInst", "")
+        do_name = fcda.get("doName", "")
+        da_name = fcda.get("daName", "")
+        fc = fcda.get("fc", "")
+
+        ln_ref = f"{prefix}{ln_class}{ln_inst}".strip()
+        if not ln_ref:
+            ln_ref = ln_name
+
+        if not do_name:
+            return None
+
+        if fc:
+            variable = f"{ln_ref}${fc}${do_name}"
+        else:
+            variable = f"{ln_ref}${do_name}"
+
+        if da_name:
+            variable = f"{variable}${da_name}"
+
+        if not ld_inst:
+            ld_inst = ld_name
+
+        return f"{ld_inst}/{variable}" if ld_inst else variable
+
+    def _map_smp_mode(self, smp_mode: str) -> int:
+        """映射采样模式"""
+        if smp_mode == "SmpPerSec":
+            return iec61850.IEC61850_SV_SMPMOD_SAMPLES_PER_SECOND
+        if smp_mode == "SecPerSmp":
+            return iec61850.IEC61850_SV_SMPMOD_SECONDS_PER_SAMPLE
+        return iec61850.IEC61850_SV_SMPMOD_SAMPLES_PER_PERIOD
+
+    def _build_smv_options(self, options: Dict[str, bool]) -> int:
+        """构建采样值选项位"""
+        opt = 0
+        if options.get("sampleSync"):
+            opt |= iec61850.IEC61850_SV_OPT_SAMPLE_SYNC
+        if options.get("sampleRate"):
+            opt |= iec61850.IEC61850_SV_OPT_SAMPLE_RATE
+        if options.get("security"):
+            opt |= iec61850.IEC61850_SV_OPT_SECURITY
+        return opt
     
     def _map_data_type(self, data_type: DataType) -> int:
         """映射数据类型到pyiec61850类型"""
         type_map = {
+            DataType.STRUCT: iec61850.IEC61850_CONSTRUCTED,
             DataType.BOOLEAN: iec61850.IEC61850_BOOLEAN,
             DataType.INT8: iec61850.IEC61850_INT8,
             DataType.INT16: iec61850.IEC61850_INT16,
@@ -366,23 +615,23 @@ class IEC61850Server:
             DataType.OCTET_STRING_64: iec61850.IEC61850_OCTET_STRING_64,
             # DataType.OCTET_STRING_6: iec61850.IEC61850_OCTET_STRING_6,
             # DataType.OCTET_STRING_8: iec61850.IEC61850_OCTET_STRING_8,
-            # DataType.VISIBLE_STRING_32: iec61850.IEC61850_VISIBLE_STRING_32,
-            # DataType.VISIBLE_STRING_64: iec61850.IEC61850_VISIBLE_STRING_64,
+            DataType.VIS_STRING_32: iec61850.IEC61850_VISIBLE_STRING_32,
+            DataType.VIS_STRING_64: iec61850.IEC61850_VISIBLE_STRING_64,
             # DataType.VISIBLE_STRING_65: iec61850.IEC61850_VISIBLE_STRING_65,
-            # DataType.VISIBLE_STRING_129: iec61850.IEC61850_VISIBLE_STRING_129,
-            # DataType.VISIBLE_STRING_255: iec61850.IEC61850_VISIBLE_STRING_255,
+            DataType.VIS_STRING_129: iec61850.IEC61850_VISIBLE_STRING_129,
+            DataType.VIS_STRING_255: iec61850.IEC61850_VISIBLE_STRING_255,
             DataType.UNICODE_STRING_255: iec61850.IEC61850_UNICODE_STRING_255,
             DataType.TIMESTAMP: iec61850.IEC61850_TIMESTAMP,
             DataType.QUALITY: iec61850.IEC61850_QUALITY,
-            # DataType.CHECK: iec61850.IEC61850_CHECK,
+            DataType.CHECK: iec61850.IEC61850_CHECK,
             # DataType.CODEDENUM: iec61850.IEC61850_CODEDENUM,
             # DataType.GENERIC_BITSTRING: iec61850.IEC61850_GENERIC_BITSTRING,
             # DataType.CONSTRUCTED: iec61850.IEC61850_CONSTRUCTED,
-            # DataType.ENTRY_TIME: iec61850.IEC61850_ENTRY_TIME,
-            # DataType.PHYCOMADDR: iec61850.IEC61850_PHYCOMADDR,
-            # DataType.CURRENCY: iec61850.IEC61850_CURRENCY,
-            # DataType.OPTFLDS: iec61850.IEC61850_OPTFLDS,
-            # DataType.TRGOPS: iec61850.IEC61850_TRGOPS,
+            DataType.ENTRY_TIME: iec61850.IEC61850_ENTRY_TIME,
+            DataType.PHYSICAL_ADDRESS: iec61850.IEC61850_PHYCOMADDR,
+            DataType.CURRENCY: iec61850.IEC61850_CURRENCY,
+            DataType.OPTION_FIELD: iec61850.IEC61850_OPTFLDS,
+            DataType.TRIGGER_OPTIONS: iec61850.IEC61850_TRGOPS,
         }
         return type_map.get(data_type, iec61850.IEC61850_INT32)
     
