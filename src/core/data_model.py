@@ -838,7 +838,7 @@ class IED(IEC61850Element):
 	def get_all_references(self) -> List[str]:
 		"""获取所有数据属性引用"""
 		refs = []
-		for ld in self.logical_devices.values():
+		for ld in self.get_logical_devices():
 			for ln in ld.logical_nodes.values():
 				for do in ln.data_objects.values():
 					for da in do.attributes.values():
