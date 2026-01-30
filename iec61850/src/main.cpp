@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <ctime>
 #include <iostream>
 #include <mutex>
@@ -16,6 +17,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <signal.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 
 namespace {
@@ -526,19 +529,45 @@ void update_attribute_value(IedServer server, DataAttribute* da, const msgpack::
 } // namespace
 
 int main(int argc, char** argv) {
-    for(int i = 1; i < argc; ++i) {
-        if(strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
+    bool enable_pdeathsig = false;
+    std::string socket_path = "/tmp/iec61850_simulator.sock";
+
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
             std::cout << "Version: " << VERSION_STRING << std::endl;
             std::cout << "Commit: " << GIT_VERSION_STRING << std::endl;
             std::cout << "Build Time: " << BUILD_TIMESTAMP << std::endl;
             return 0;
         }
+
+        if (strcmp(argv[i], "--pdeathsig") == 0) {
+            enable_pdeathsig = true;
+            continue;
+        }
+
+        if (strcmp(argv[i], "--socket") == 0 && i + 1 < argc) {
+            socket_path = argv[++i];
+            continue;
+        }
+
+        if (strncmp(argv[i], "--socket=", 9) == 0) {
+            socket_path = argv[i] + 9;
+            continue;
+        }
+
+        if (argv[i][0] != '-') {
+            socket_path = argv[i];
+        }
     }
 
-    std::string socket_path = "/tmp/iec61850_simulator.sock";
-    if (argc > 1) {
-        socket_path = argv[1];
+#ifdef __linux__
+    if (enable_pdeathsig) {
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if (getppid() == 1) {
+            return 1;
+        }
     }
+#endif
 
     auto* context = new BackendContext();
 

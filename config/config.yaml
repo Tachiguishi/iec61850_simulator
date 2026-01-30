@@ -12,6 +12,14 @@ ipc:
   socket_path: "/tmp/iec61850_simulator.sock"
   request_timeout_ms: 3000
 
+# 通信核心进程
+core:
+  auto_start: true
+  binary_path: "iec61850/build/src/iec61850_core"
+  pdeathsig: true
+  # 可选参数，支持 {socket_path} 占位符
+  args: []
+
 # 服务端配置
 server:
   # 网络设置

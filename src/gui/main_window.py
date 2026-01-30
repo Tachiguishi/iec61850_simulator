@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from gui.server_panel import ServerPanel
 from gui.client_panel import ClientPanel
 from gui.log_widget import LogWidget
+from backend.core_process import CoreProcessManager
 
 # UI文件路径
 UI_DIR = Path(__file__).parent / "ui"
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
         self._init_statusbar_widgets()
         self._restore_geometry()
         self._setup_logging()
+        self._init_core_process()
     
     def _load_config(self) -> dict:
         """加载配置文件"""
@@ -200,6 +202,19 @@ class MainWindow(QMainWindow):
             self.log_widget.append_log(level, text)
         
         logger.add(log_handler, format="{message}", level="DEBUG")
+
+    def _init_core_process(self):
+        """初始化并启动通信核心进程"""
+        project_root = Path(__file__).parent.parent.parent
+        self.core_process = CoreProcessManager(self.config, project_root, self)
+
+        self.core_process.output.connect(lambda msg: self.log_widget.append_log("info", f"[core] {msg}"))
+        self.core_process.error_output.connect(lambda msg: self.log_widget.append_log("error", f"[core] {msg}"))
+        self.core_process.state_changed.connect(lambda state: self.info_label.setText(f"Core: {state}"))
+
+        core_config = self.config.get("core", {})
+        if core_config.get("auto_start", True):
+            self.core_process.start()
     
     # ========================================================================
     # 事件处理
@@ -320,6 +335,9 @@ class MainWindow(QMainWindow):
             self.server_panel.stop_server()
         else:
             self.client_panel.disconnect()
+
+        if hasattr(self, "core_process"):
+            self.core_process.stop()
         
         # 保存窗口几何位置
         self.settings.setValue("geometry", self.saveGeometry())
