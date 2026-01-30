@@ -317,9 +317,9 @@ bool handle_server_action(
     msgpack::packer<msgpack::sbuffer>& pk) {
     if (action == "server.start") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(core_logger(), "server.start requested");
+        LOG4CPLUS_INFO(server_logger(), "server.start requested");
         if (!has_payload || payload.type != msgpack::type::MAP) {
-            LOG4CPLUS_ERROR(core_logger(), "server.start missing payload");
+            LOG4CPLUS_ERROR(server_logger(), "server.start missing payload");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -330,7 +330,7 @@ bool handle_server_action(
         auto config_obj = ipc::codec::find_key(payload, "config");
         auto model_obj = ipc::codec::find_key(payload, "model");
         if (!config_obj || !model_obj) {
-            LOG4CPLUS_ERROR(core_logger(), "server.start invalid payload");
+            LOG4CPLUS_ERROR(server_logger(), "server.start invalid payload");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -369,7 +369,7 @@ bool handle_server_action(
         }
         IedServer_start(context.server, port);
 
-        LOG4CPLUS_INFO(core_logger(), "Server started on port " << port);
+        LOG4CPLUS_INFO(server_logger(), "Server started on port " << port);
 
         pk.pack("payload");
         ipc::codec::pack_success_payload(pk);
@@ -380,7 +380,7 @@ bool handle_server_action(
 
     if (action == "server.stop") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(core_logger(), "server.stop requested");
+        LOG4CPLUS_INFO(server_logger(), "server.stop requested");
 
         if (context.server) {
             IedServer_stop(context.server);
@@ -406,10 +406,10 @@ bool handle_server_action(
 
     if (action == "server.load_model") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(core_logger(), "server.load_model requested");
+        LOG4CPLUS_INFO(server_logger(), "server.load_model requested");
 
         if (!has_payload) {
-            LOG4CPLUS_ERROR(core_logger(), "server.load_model missing payload");
+            LOG4CPLUS_ERROR(server_logger(), "server.load_model missing payload");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -441,7 +441,7 @@ bool handle_server_action(
         auto ref_obj = ipc::codec::find_key(payload, "reference");
         auto value_obj = ipc::codec::find_key(payload, "value");
         if (!context.server || !context.server_model || !ref_obj || !value_obj) {
-            LOG4CPLUS_ERROR(core_logger(), "server.set_data_value invalid request");
+            LOG4CPLUS_ERROR(server_logger(), "server.set_data_value invalid request");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -450,7 +450,7 @@ bool handle_server_action(
         }
 
         std::string reference = ipc::codec::as_string(*ref_obj, "");
-        LOG4CPLUS_DEBUG(core_logger(), "Update value: " << reference);
+        LOG4CPLUS_DEBUG(server_logger(), "Update value: " << reference);
         ModelNode* node = IedModel_getModelNodeByObjectReference(context.server_model, reference.c_str());
         if (node && ModelNode_getType(node) == DataAttributeModelType) {
             auto* da = reinterpret_cast<DataAttribute*>(node);
@@ -470,7 +470,7 @@ bool handle_server_action(
         std::lock_guard<std::mutex> lock(context.mutex);
         auto refs_obj = ipc::codec::find_key(payload, "references");
         if (!context.server || !context.server_model || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
-            LOG4CPLUS_ERROR(core_logger(), "server.get_values invalid request");
+            LOG4CPLUS_ERROR(server_logger(), "server.get_values invalid request");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -507,7 +507,7 @@ bool handle_server_action(
 
     if (action == "server.get_clients") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_DEBUG(core_logger(), "server.get_clients requested");
+        LOG4CPLUS_DEBUG(server_logger(), "server.get_clients requested");
         pk.pack("payload");
         pk.pack_map(1);
         pk.pack("clients");

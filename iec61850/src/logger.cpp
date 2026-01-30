@@ -13,6 +13,16 @@ log4cplus::Logger& core_logger() {
 	return logger;
 }
 
+log4cplus::Logger& server_logger() {
+	static log4cplus::Logger logger = log4cplus::Logger::getInstance(LOG4CPLUS_TEXT("iec61850_core.server"));
+	return logger;
+}
+
+log4cplus::Logger& client_logger() {
+	static log4cplus::Logger logger = log4cplus::Logger::getInstance(LOG4CPLUS_TEXT("iec61850_core.client"));
+	return logger;
+}
+
 static std::filesystem::path resolve_config_path(const std::string& config_path) {
 	std::filesystem::path path(config_path);
 	if (path.is_absolute()) {

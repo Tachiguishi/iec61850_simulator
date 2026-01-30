@@ -137,7 +137,7 @@ bool handle_client_action(
         auto port_obj = ipc::codec::find_key(payload, "port");
         auto cfg_obj = ipc::codec::find_key(payload, "config");
         if (!host_obj || !port_obj) {
-            LOG4CPLUS_ERROR(core_logger(), "client.connect invalid request");
+            LOG4CPLUS_ERROR(client_logger(), "client.connect invalid request");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -148,7 +148,7 @@ bool handle_client_action(
         std::string host = ipc::codec::as_string(*host_obj, "");
         int port = static_cast<int>(ipc::codec::as_int64(*port_obj, 102));
 
-        LOG4CPLUS_INFO(core_logger(), "client.connect to " << host << ":" << port);
+        LOG4CPLUS_INFO(client_logger(), "client.connect to " << host << ":" << port);
 
         if (context.client_connection) {
             IedConnection_destroy(context.client_connection);
@@ -166,13 +166,13 @@ bool handle_client_action(
         IedClientError error = IED_ERROR_OK;
         IedConnection_connect(context.client_connection, &error, host.c_str(), port);
         if (error == IED_ERROR_OK) {
-            LOG4CPLUS_INFO(core_logger(), "client.connect success");
+            LOG4CPLUS_INFO(client_logger(), "client.connect success");
             pk.pack("payload");
             ipc::codec::pack_success_payload(pk);
             pk.pack("error");
             pk.pack_nil();
         } else {
-            LOG4CPLUS_ERROR(core_logger(), "client.connect failed: " << IedClientError_toString(error));
+            LOG4CPLUS_ERROR(client_logger(), "client.connect failed: " << IedClientError_toString(error));
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -183,7 +183,7 @@ bool handle_client_action(
 
     if (action == "client.disconnect") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(core_logger(), "client.disconnect requested");
+        LOG4CPLUS_INFO(client_logger(), "client.disconnect requested");
         if (context.client_connection) {
             IedConnection_close(context.client_connection);
             IedConnection_destroy(context.client_connection);
@@ -199,13 +199,13 @@ bool handle_client_action(
     if (action == "client.browse") {
         std::lock_guard<std::mutex> lock(context.mutex);
         if (!context.client_connection) {
-            LOG4CPLUS_ERROR(core_logger(), "client.browse when not connected");
+            LOG4CPLUS_ERROR(client_logger(), "client.browse when not connected");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
             ipc::codec::pack_error(pk, "Client not connected");
         } else {
-            LOG4CPLUS_DEBUG(core_logger(), "client.browse requested");
+            LOG4CPLUS_DEBUG(client_logger(), "client.browse requested");
             pk.pack("payload");
             pk.pack_map(1);
             pk.pack("model");
@@ -220,7 +220,7 @@ bool handle_client_action(
         std::lock_guard<std::mutex> lock(context.mutex);
         auto ref_obj = ipc::codec::find_key(payload, "reference");
         if (!context.client_connection || !ref_obj) {
-            LOG4CPLUS_ERROR(core_logger(), "client.read invalid request");
+            LOG4CPLUS_ERROR(client_logger(), "client.read invalid request");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -229,7 +229,7 @@ bool handle_client_action(
         }
 
         std::string reference = ipc::codec::as_string(*ref_obj, "");
-        LOG4CPLUS_DEBUG(core_logger(), "client.read " << reference);
+        LOG4CPLUS_DEBUG(client_logger(), "client.read " << reference);
         std::vector<FunctionalConstraint> fcs = {IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_SP, IEC61850_FC_CF};
         IedClientError error = IED_ERROR_OK;
         MmsValue* value = nullptr;
@@ -290,7 +290,7 @@ bool handle_client_action(
         std::lock_guard<std::mutex> lock(context.mutex);
         auto refs_obj = ipc::codec::find_key(payload, "references");
         if (!context.client_connection || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
-            LOG4CPLUS_ERROR(core_logger(), "client.read_batch invalid request");
+            LOG4CPLUS_ERROR(client_logger(), "client.read_batch invalid request");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -298,7 +298,7 @@ bool handle_client_action(
             return true;
         }
 
-        LOG4CPLUS_DEBUG(core_logger(), "client.read_batch requested");
+        LOG4CPLUS_DEBUG(client_logger(), "client.read_batch requested");
         pk.pack("payload");
         pk.pack_map(1);
         pk.pack("values");
@@ -362,7 +362,7 @@ bool handle_client_action(
         auto ref_obj = ipc::codec::find_key(payload, "reference");
         auto value_obj = ipc::codec::find_key(payload, "value");
         if (!context.client_connection || !ref_obj || !value_obj) {
-            LOG4CPLUS_ERROR(core_logger(), "client.write invalid request");
+            LOG4CPLUS_ERROR(client_logger(), "client.write invalid request");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
@@ -371,7 +371,7 @@ bool handle_client_action(
         }
 
         std::string reference = ipc::codec::as_string(*ref_obj, "");
-        LOG4CPLUS_DEBUG(core_logger(), "client.write " << reference);
+        LOG4CPLUS_DEBUG(client_logger(), "client.write " << reference);
         IedClientError error = IED_ERROR_OK;
         bool success = false;
         if (value_obj->type == msgpack::type::BOOLEAN) {
@@ -421,10 +421,10 @@ bool handle_client_action(
         pk.pack(success);
         pk.pack("error");
         if (success) {
-            LOG4CPLUS_INFO(core_logger(), "client.write success");
+            LOG4CPLUS_INFO(client_logger(), "client.write success");
             pk.pack_nil();
         } else {
-            LOG4CPLUS_ERROR(core_logger(), "client.write failed: " << IedClientError_toString(error));
+            LOG4CPLUS_ERROR(client_logger(), "client.write failed: " << IedClientError_toString(error));
             ipc::codec::pack_error(pk, IedClientError_toString(error));
         }
         return true;
