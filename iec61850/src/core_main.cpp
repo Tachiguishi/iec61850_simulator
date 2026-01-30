@@ -5,7 +5,6 @@
 #include "logger.hpp"
 #include "msgpack_codec.hpp"
 
-#include <log4cplus/configurator.h>
 #include <log4cplus/initializer.h>
 #include <log4cplus/loggingmacros.h>
 
@@ -18,8 +17,11 @@
 #include <unistd.h>
 
 int main(int argc, char** argv) {
+    log4cplus::Initializer log_initializer;
+
     bool enable_pdeathsig = false;
     std::string socket_path = "/tmp/iec61850_simulator.sock";
+    std::string config_path = "log4cplus.ini";
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
@@ -31,6 +33,16 @@ int main(int argc, char** argv) {
 
         if (strcmp(argv[i], "--pdeathsig") == 0) {
             enable_pdeathsig = true;
+            continue;
+        }
+
+        if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+            config_path = argv[++i];
+            continue;
+        }
+
+        if (strncmp(argv[i], "--config=", 9) == 0) {
+            config_path = argv[i] + 9;
             continue;
         }
 
@@ -57,6 +69,8 @@ int main(int argc, char** argv) {
         }
     }
 #endif
+
+    init_logging(config_path);
 
     LOG4CPLUS_INFO(core_logger(), "iec61850_core starting");
     LOG4CPLUS_INFO(core_logger(), "Version: " << VERSION_STRING << ", Commit: " << GIT_VERSION_STRING);

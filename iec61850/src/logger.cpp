@@ -1,18 +1,48 @@
 #include "logger.hpp"
 
-#include <log4cplus/logger.h>
-#include <log4cplus/consoleappender.h>
+#include <filesystem>
+
+#include <limits.h>
+#include <unistd.h>
+
+#include <log4cplus/configurator.h>
+#include <log4cplus/helpers/loglog.h>
 
 log4cplus::Logger& core_logger() {
-	static log4cplus::Logger logger = []{
-		log4cplus::Logger l = log4cplus::Logger::getInstance(LOG4CPLUS_TEXT("iec61850_core"));
-		log4cplus::tstring pattern = LOG4CPLUS_TEXT("%D{%Y-%m-%d %H:%M:%S %Q} %p[%t]: %m%n");
-		log4cplus::SharedAppenderPtr appender(new log4cplus::ConsoleAppender());
-		std::unique_ptr<log4cplus::Layout> layout(new log4cplus::PatternLayout(pattern));
-		appender->setLayout(std::move(layout));
-		l.addAppender(appender);
-		l.setLogLevel(log4cplus::ALL_LOG_LEVEL);
-		return l;
-	}();
+	static log4cplus::Logger logger = log4cplus::Logger::getInstance(LOG4CPLUS_TEXT("iec61850_core"));
 	return logger;
+}
+
+static std::filesystem::path resolve_config_path(const std::string& config_path) {
+	std::filesystem::path path(config_path);
+	if (path.is_absolute()) {
+		return path;
+	}
+
+	char buffer[PATH_MAX] = {0};
+	ssize_t len = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+	if (len > 0) {
+		buffer[len] = '\0';
+		std::filesystem::path exe_path(buffer);
+		return exe_path.parent_path() / path;
+	}
+
+	return std::filesystem::absolute(path);
+}
+
+void init_logging(const std::string& config_path) {
+	try {
+		auto resolved = resolve_config_path(config_path);
+		if (std::filesystem::exists(resolved)) {
+			std::filesystem::create_directories("logs");
+			log4cplus::PropertyConfigurator::doConfigure(LOG4CPLUS_STRING_TO_TSTRING(resolved.string()));
+			return;
+		}
+	} catch (...) {
+		log4cplus::helpers::LogLog::getLogLog()->error(LOG4CPLUS_TEXT("Failed to load logging config"));
+	}
+
+	log4cplus::BasicConfigurator fallback;
+	fallback.configure();
+	log4cplus::Logger::getRoot().setLogLevel(log4cplus::INFO_LOG_LEVEL);
 }

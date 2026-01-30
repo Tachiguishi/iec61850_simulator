@@ -39,3 +39,10 @@ target_compile_definitions(iec61850_core PRIVATE
 	GIT_VERSION_STRING="${GIT_VERSION}"
 	BUILD_TIMESTAMP="${CURRENT_TIMESTAMP}"
 )
+
+add_custom_command(TARGET iec61850_core POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		"${CMAKE_CURRENT_SOURCE_DIR}/log4cplus.ini"
+		"$<TARGET_FILE_DIR:iec61850_core>/log4cplus.ini"
+	COMMAND ${CMAKE_COMMAND} -E echo "Copied log4cplus.ini to $<TARGET_FILE_DIR:iec61850_core>"
+)

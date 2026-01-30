@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum, auto
 from typing import Any, Callable, Dict, List, Optional
+from urllib import response
 
 from loguru import logger
 
@@ -134,7 +135,9 @@ class IEC61850ServerProxy:
     def load_model(self, ied: IED) -> None:
         self.ied = ied
         try:
-            self._ipc.request("server.load_model", {"model": ied.to_dict()})
+            response = self._ipc.request("server.load_model", {"model": ied.to_dict()})
+            if not response.data.get("success", False):
+                raise IPCError("Backend failed to load model")
             self._log("info", f"Model loaded: {ied.name}")
         except IPCError as exc:
             self._log("error", f"Load model failed: {exc}")
@@ -148,7 +151,9 @@ class IEC61850ServerProxy:
                 da.value = value
                 da.timestamp = datetime.now()
         try:
-            self._ipc.request("server.set_data_value", {"reference": reference, "value": value})
+            response = self._ipc.request("server.set_data_value", {"reference": reference, "value": value})
+            if not response.data.get("success", False):
+                raise IPCError("Backend failed to set data value")
             for callback in self._data_callbacks:
                 callback(reference, old_value, value)
         except IPCError as exc:
