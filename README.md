@@ -1,6 +1,7 @@
 # IEC61850 Simulator
 
 基于 PyQt6 的 IEC61850 协议仿真器，支持服务端（IED仿真）和客户端（SCADA/控制台）两种工作模式。
+GUI 与通信进程解耦：通信由 C++ 后端负责，GUI 通过 Unix Domain Socket + MessagePack 进行 IPC。
 
 ## 功能特性
 
@@ -46,6 +47,16 @@ iec61850_simulator/
 │   │   ├── __init__.py
 │   │   └── data_model.py       # IEC61850 数据模型实现
 │   │
+│   ├── ipc/                    # IPC 客户端封装
+│   │   ├── __init__.py
+│   │   └── uds_client.py        # UDS + MessagePack 客户端
+│   │
+│   ├── backend/                # IPC 代理层
+│   │   ├── __init__.py
+│   │   ├── types.py             # 共享类型
+│   │   ├── server_proxy.py      # 服务端代理
+│   │   └── client_proxy.py      # 客户端代理
+│   │
 │   ├── server/                 # 服务端模块
 │   │   ├── __init__.py
 │   │   └── iec61850_server.py  # MMS 服务器实现
@@ -61,6 +72,14 @@ iec61850_simulator/
 │       ├── client_panel.py     # 客户端面板
 │       ├── data_tree_widget.py # 数据树控件
 │       └── log_widget.py       # 日志控件
+│
+├── cpp_backend/                # C++ 通信进程骨架
+│   ├── CMakeLists.txt
+│   └── src/
+│       ├── main.cpp
+│       ├── ipc_server.hpp
+│       ├── ipc_server.cpp
+│       └── protocol.hpp
 │
 └── logs/                       # 日志文件 (运行时生成)
 ```
@@ -112,10 +131,7 @@ python main.py --client
 
 ### 无界面服务器模式
 
-运行无界面的 IED 服务器:
-```bash
-python main.py --headless
-```
+无界面 IEC61850 通信请使用 C++ 后端进程，并通过 GUI 的 IPC 客户端交互。
 
 指定端口:
 ```bash

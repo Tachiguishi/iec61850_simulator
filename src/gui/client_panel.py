@@ -23,7 +23,7 @@ from PyQt6 import uic
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gui.data_tree_widget import DataTreeWidget
-from client.iec61850_client import IEC61850Client, ClientConfig, ClientState
+from client.client_proxy import IEC61850ClientProxy, ClientConfig, ClientState
 
 # UI文件路径
 UI_DIR = Path(__file__).parent / "ui"
@@ -84,7 +84,7 @@ class ClientPanel(QWidget):
         super().__init__(parent)
         
         self.config = config
-        self.client: Optional[IEC61850Client] = None
+        self.client: Optional[IEC61850ClientProxy] = None
         self.saved_servers: List[Dict] = []
         
         # 加载UI文件
@@ -148,7 +148,11 @@ class ClientPanel(QWidget):
             auto_reconnect=True,
         )
         
-        self.client = IEC61850Client(config)
+        ipc_config = self.config.get("ipc", {})
+        socket_path = ipc_config.get("socket_path", "/tmp/iec61850_simulator.sock")
+        timeout_ms = ipc_config.get("request_timeout_ms", 3000)
+
+        self.client = IEC61850ClientProxy(config, socket_path, timeout_ms)
         
         # 连接回调
         self.client.on_state_change(self._on_client_state_changed)

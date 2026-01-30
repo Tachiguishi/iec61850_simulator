@@ -96,7 +96,7 @@ def run_headless_server(host: str = "0.0.0.0", port: int = 102):
     import signal
     import time
     
-    from server.iec61850_server import IEC61850Server, ServerConfig
+    from server.server_proxy import ServerConfig
     from core.data_model import DataModelManager
     
     logger.info(f"Starting headless server on {host}:{port}")
@@ -109,17 +109,6 @@ def run_headless_server(host: str = "0.0.0.0", port: int = 102):
         enable_reporting=True,
     )
     
-    server = IEC61850Server(config)
-    
-    # 加载或创建数据模型
-    data_model_path = PROJECT_ROOT / "config" / "data_model.yaml"
-    if data_model_path.exists():
-        server.load_ied_from_yaml(str(data_model_path))
-        logger.info(f"Loaded data model from {data_model_path}")
-    else:
-        server.data_model_manager.create_default_ied()
-        server.ied = server.data_model_manager.ieds.get("SimulatedIED")
-        logger.info("Created default IED")
     
     # 信号处理
     running = True
@@ -132,124 +121,12 @@ def run_headless_server(host: str = "0.0.0.0", port: int = 102):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # 启动服务器
-    if server.start():
-        logger.info(f"Server running on {host}:{port}")
-        logger.info("Press Ctrl+C to stop")
-        
-        # 主循环
-        while running:
-            try:
-                time.sleep(1)
-                
-                # 输出状态
-                status = server.get_status()
-                clients = len(server.get_connected_clients())
-                if clients > 0:
-                    logger.info(f"Active clients: {clients}")
-                    
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}")
-        
-        # 停止服务器
-        server.stop()
-        logger.info("Server stopped")
-    else:
-        logger.error("Failed to start server")
-        return 1
     
     return 0
 
 
 def run_client_cli(host: str, port: int = 102):
-    """运行命令行客户端"""
-    from client.iec61850_client import IEC61850Client, ClientConfig
-    
-    logger.info(f"Connecting to {host}:{port}")
-    
-    client = IEC61850Client()
-    
-    if client.connect(host, port):
-        logger.info("Connected successfully")
-        
-        # 获取服务器信息
-        info = client.get_server_info()
-        if info:
-            print(f"\nServer Info:")
-            print(f"  IED Name: {info.get('ied_name')}")
-            print(f"  Manufacturer: {info.get('manufacturer')}")
-            print(f"  Model: {info.get('model')}")
-            print(f"  Revision: {info.get('revision')}")
-        
-        # 获取逻辑设备列表
-        lds = client.get_logical_devices()
-        print(f"\nLogical Devices: {lds}")
-        
-        # 交互式命令
-        print("\nCommands:")
-        print("  browse              - Browse data model")
-        print("  read <reference>    - Read value")
-        print("  write <ref> <value> - Write value")
-        print("  quit                - Disconnect and exit")
-        print()
-        
-        while True:
-            try:
-                cmd = input(">>> ").strip()
-                if not cmd:
-                    continue
-                
-                parts = cmd.split()
-                action = parts[0].lower()
-                
-                if action == "quit" or action == "exit":
-                    break
-                
-                elif action == "browse":
-                    model = client.browse_data_model()
-                    import json
-                    print(json.dumps(model, indent=2, ensure_ascii=False))
-                
-                elif action == "read" and len(parts) >= 2:
-                    ref = parts[1]
-                    dv = client.read_value(ref)
-                    if dv:
-                        print(f"Value: {dv.value}")
-                        print(f"Quality: {dv.quality}")
-                        print(f"Timestamp: {dv.timestamp}")
-                    else:
-                        print("Failed to read")
-                
-                elif action == "write" and len(parts) >= 3:
-                    ref = parts[1]
-                    value = parts[2]
-                    # 尝试转换值
-                    try:
-                        if value.lower() in ("true", "false"):
-                            value = value.lower() == "true"
-                        elif "." in value:
-                            value = float(value)
-                        else:
-                            value = int(value)
-                    except ValueError:
-                        pass
-                    
-                    success = client.write_value(ref, value)
-                    print("Success" if success else "Failed")
-                
-                else:
-                    print("Unknown command")
-                    
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                print(f"Error: {e}")
-        
-        client.disconnect()
-        logger.info("Disconnected")
-    else:
-        logger.error("Failed to connect")
-        return 1
+    """运行TUI客户端"""
     
     return 0
 

@@ -21,6 +21,7 @@ pushd "src/libiec61850"
 
 mkdir -p build && cd build
 cmake -DBUILD_EXAMPLES=OFF \
+	 -DFETCHCONTENT_UPDATES_DISCONNECTED=ON \
 	 -DBUILD_PYTHON_BINDINGS=ON \
 	 -DCONFIG_USE_EXTERNAL_MBEDTLS_DYNLIB=OFF \
 	 .. && make

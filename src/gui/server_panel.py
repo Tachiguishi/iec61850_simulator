@@ -23,7 +23,7 @@ from PyQt6 import uic
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gui.data_tree_widget import DataTreeWidget
-from server.iec61850_server import IEC61850Server, ServerConfig, ServerState
+from server.server_proxy import IEC61850ServerProxy, ServerConfig, ServerState
 from core.data_model_manager import DataModelManager
 
 # UI文件路径
@@ -48,7 +48,7 @@ class ServerPanel(QWidget):
         super().__init__(parent)
         
         self.config = config
-        self.server: Optional[IEC61850Server] = None
+        self.server: Optional[IEC61850ServerProxy] = None
         self.data_model_manager = DataModelManager()
         
         # 加载UI文件
@@ -120,7 +120,11 @@ class ServerPanel(QWidget):
             enable_reporting=server_config.get("reporting", {}).get("enabled", True),
         )
         
-        self.server = IEC61850Server(config)
+        ipc_config = self.config.get("ipc", {})
+        socket_path = ipc_config.get("socket_path", "/tmp/iec61850_simulator.sock")
+        timeout_ms = ipc_config.get("request_timeout_ms", 3000)
+
+        self.server = IEC61850ServerProxy(config, socket_path, timeout_ms)
         
         # 连接回调
         self.server.on_state_change(self._on_server_state_changed)
@@ -283,18 +287,10 @@ class ServerPanel(QWidget):
         if not self.server or not self.server.ied:
             return
         
-        # 收集所有值
-        values = {}
-        for ref in self.server.ied.get_all_references():
-            da = self.server.ied.get_data_attribute(ref)
-            if da:
-                values[ref] = {
-                    "value": da.value,
-                    "quality": da.quality,
-                    "timestamp": da.timestamp.isoformat() if da.timestamp else None
-                }
-        
-        self.data_tree.update_values(values)
+        references = self.server.ied.get_all_references()
+        values = self.server.get_values(references)
+        if values:
+            self.data_tree.update_values(values)
     
     def _refresh_client_list(self):
         """刷新客户端列表"""

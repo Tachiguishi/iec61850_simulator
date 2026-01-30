@@ -7,6 +7,11 @@ application:
   language: "zh-CN"
   theme: "fusion"  # fusion, windows, macos
 
+# IPC配置（GUI <-> C++通信进程）
+ipc:
+  socket_path: "/tmp/iec61850_simulator.sock"
+  request_timeout_ms: 3000
+
 # 服务端配置
 server:
   # 网络设置
