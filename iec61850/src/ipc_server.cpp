@@ -11,6 +11,16 @@
 
 namespace ipc {
 
+namespace {
+std::string g_socket_path;
+
+void cleanup_socket_file() {
+    if (!g_socket_path.empty()) {
+        ::unlink(g_socket_path.c_str());
+    }
+}
+} // namespace
+
 IpcServer::IpcServer(std::string socket_path, RequestHandler handler)
     : socket_path_(std::move(socket_path)), handler_(std::move(handler)) {}
 
@@ -21,6 +31,11 @@ IpcServer::~IpcServer() {
 bool IpcServer::start() {
     if (running_) {
         return true;
+    }
+
+    if (g_socket_path.empty()) {
+        g_socket_path = socket_path_;
+        std::atexit(cleanup_socket_file);
     }
 
     server_fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);

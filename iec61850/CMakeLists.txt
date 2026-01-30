@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 project(iec61850_backend LANGUAGES CXX)
 set(VERSION "0.1.0")
 
@@ -15,6 +15,7 @@ FetchContent_Declare(
 	GIT_TAG v1.6
 	GIT_SHALLOW TRUE
 )
+set(BUILD_EXAMPLES OFF CACHE BOOL "Build libiec61850 examples" FORCE)
 
 FetchContent_Declare(
 	msgpack
@@ -22,12 +23,22 @@ FetchContent_Declare(
 	GIT_TAG cpp-7.0.0
 	GIT_SHALLOW TRUE
 )
-
-set(BUILD_EXAMPLES OFF CACHE BOOL "Build libiec61850 examples" FORCE)
 set(MSGPACK_CXX17 ON CACHE BOOL "Use C++17 features" FORCE)
 set(MSGPACK_USE_BOOST OFF CACHE BOOL "Disable Boost usage" FORCE)
 set(MSGPACK_BUILD_DOCS OFF CACHE BOOL "Disable building docs" FORCE)
-FetchContent_MakeAvailable(libiec61850 msgpack)
+
+FetchContent_Declare(
+	log4cplus
+	GIT_REPOSITORY git@github.com:log4cplus/log4cplus.git
+	GIT_TAG REL_2_1_2
+	GIT_SHALLOW TRUE
+	GIT_SUBMODULES_RECURSE TRUE
+)
+set(WITH_UNIT_TESTS OFF CACHE BOOL "log4cplus unit tests" FORCE)
+set(LOG4CPLUS_BUILD_TESTING OFF CACHE BOOL "log4cplus testing" FORCE)
+set(LOG4CPLUS_BUILD_LOGGINGSERVER OFF CACHE BOOL "log4cplus logging server" FORCE)
+
+FetchContent_MakeAvailable(libiec61850 msgpack log4cplus)
 
 add_subdirectory(./src)
 enable_testing()

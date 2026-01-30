@@ -11,6 +11,16 @@ target_include_directories(iec61850_core PRIVATE
 )
 target_link_libraries(iec61850_core PRIVATE iec61850)
 
+if(TARGET msgpackc-cxx)
+	target_link_libraries(iec61850_core PRIVATE msgpackc-cxx)
+endif()
+
+if(TARGET log4cplus::log4cplus)
+	target_link_libraries(iec61850_core PRIVATE log4cplus::log4cplus)
+elseif(TARGET log4cplus)
+	target_link_libraries(iec61850_core PRIVATE log4cplus)
+endif()
+
 string(TIMESTAMP CURRENT_TIMESTAMP "%Y-%m-%d %H:%M:%S")
 execute_process(
 	COMMAND git describe --tags --always --dirty
