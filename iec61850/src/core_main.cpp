@@ -73,8 +73,7 @@ int main(int argc, char** argv) {
     init_logging(config_path);
 
     LOG4CPLUS_INFO(core_logger(), "iec61850_core starting");
-    LOG4CPLUS_INFO(core_logger(), "Version: " << VERSION_STRING << ", Commit: " << GIT_VERSION_STRING);
-    LOG4CPLUS_INFO(core_logger(), "Build Time: " << BUILD_TIMESTAMP);
+    LOG4CPLUS_INFO(core_logger(), "Version: " << VERSION_STRING << "(" << GIT_VERSION_STRING << ") at " << BUILD_TIMESTAMP);
     LOG4CPLUS_INFO(core_logger(), "Socket: " << socket_path);
     LOG4CPLUS_INFO(core_logger(), "Parent death signal: " << (enable_pdeathsig ? "enabled" : "disabled"));
 

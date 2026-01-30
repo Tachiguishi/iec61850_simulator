@@ -5,6 +5,10 @@ set(VERSION "0.1.0")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(DEBUG_BUILD "Build with debug info" ON)
+option(BUILD_CORE_TESTS "Build iec61850 core tests" ${DEBUG_BUILD})
+
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 include(FetchContent)
 
 set(FETCHCONTENT_QUIET OFF)
@@ -40,6 +44,13 @@ set(LOG4CPLUS_BUILD_LOGGINGSERVER OFF CACHE BOOL "log4cplus logging server" FORC
 
 FetchContent_MakeAvailable(libiec61850 msgpack log4cplus)
 
+if(DEBUG_BUILD)
+	set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+endif()
+
 add_subdirectory(./src)
-enable_testing()
-add_subdirectory(./tests)
+
+if(BUILD_CORE_TESTS)
+	enable_testing()
+	add_subdirectory(./tests)
+endif()
