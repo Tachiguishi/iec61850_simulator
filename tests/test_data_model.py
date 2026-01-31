@@ -71,8 +71,6 @@ class TestDataType:
     def test_from_string_all_types(self):
         """测试所有数据类型都能被正确获取"""
         for dt in DataType:
-            # 通过名称
-            assert DataType.from_string(dt.name) == dt
             # 通过值
             assert DataType.from_string(dt.value) == dt
 

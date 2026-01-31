@@ -1,25 +1,5 @@
 # IEC61850 Simulator 测试文档
 
-## 概述
-
-本目录包含 IEC61850 模拟器的单元测试和集成测试。
-
-## 测试文件
-
-- `test_iec61850_server.py` - IEC61850 服务器的单元测试
-
-## 安装测试依赖
-
-```bash
-pip install pytest pytest-cov pytest-mock
-```
-
-或者使用项目依赖文件：
-
-```bash
-pip install -e ".[test]"
-```
-
 ## 运行测试
 
 ### 运行所有测试
@@ -61,7 +41,7 @@ pytest -s
 ### 生成覆盖率报告
 
 ```bash
-pytest --cov=src --cov-report=html
+pytest -v --cov=src --cov-report=html
 ```
 
 然后在浏览器中打开 `htmlcov/index.html` 查看报告。

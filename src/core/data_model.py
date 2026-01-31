@@ -290,12 +290,10 @@ class DataAttribute(IEC61850Element):
 									 DataType.INT32U, DataType.ENUM, DataType.DBPOS,
 									 DataType.QUALITY):
 				self.value = int(self.value)
-			elif self.data_type in (DataType.FLOAT32, DataType.FLOAT64, 
-									 DataType.ANALOGUE_VALUE):
+			elif self.data_type in (DataType.FLOAT32, DataType.FLOAT64):
 				self.value = float(self.value)
 			elif self.data_type in (DataType.VIS_STRING_32, DataType.VIS_STRING_64,
-									 DataType.VIS_STRING_255, DataType.UNICODE_STRING_255,
-									 DataType.UNIT):
+									 DataType.VIS_STRING_255, DataType.UNICODE_STRING_255):
 				self.value = str(self.value)
 		except (ValueError, TypeError) as e:
 			logger.warning(f"Value conversion failed for {self.name}: {e}")
@@ -767,6 +765,14 @@ class IED(IEC61850Element):
 		ap._parent = self
 		self.access_points[ap.name] = ap
 		return ap
+
+	def add_logical_device(self, ld: LogicalDevice, access_point: str = "AP1") -> LogicalDevice:
+		"""添加逻辑设备（便捷方法，自动放入访问点）"""
+		ap = self.access_points.get(access_point)
+		if not ap:
+			ap = AccessPoint(name=access_point)
+			self.add_access_point(ap)
+		return ap.add_logical_device(ld)
 	
 	def get_access_point(self, name: str) -> Optional[AccessPoint]:
 		"""获取访问点"""
