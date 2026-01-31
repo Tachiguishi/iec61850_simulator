@@ -3,6 +3,7 @@ set(OLD_CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE})
 set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 
 include(FetchContent)
+
 FetchContent_Declare(
   googletest
   GIT_REPOSITORY git@github.com:google/googletest.git
@@ -25,6 +26,9 @@ add_compile_definitions(
   MSGPACK_NO_BOOST
 )
 
+option(ENABLE_COVERAGE "Enable coverage reporting" ON)
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/coverage.cmake)
+
 target_include_directories(action_server_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../src
@@ -41,6 +45,10 @@ target_link_libraries(action_server_tests PRIVATE
   GTest::gtest
   GTest::gtest_main
 )
+
+if(ENABLE_COVERAGE)
+  enable_coverage_for(action_server_tests)
+endif()
 
 if(TARGET msgpackc-cxx)
   target_link_libraries(action_server_tests PRIVATE msgpackc-cxx)

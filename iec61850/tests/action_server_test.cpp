@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
 #include "action_server.hpp"
+#include "logger.hpp"
 #include "msgpack_codec.hpp"
 
 #include <msgpack.hpp>
 
 #include <functional>
+#include <mutex>
 
 namespace {
 
@@ -60,6 +62,28 @@ std::string get_error_message(const msgpack::object& response) {
     return ipc::codec::as_string(*msg_obj, "");
 }
 
+bool get_success_flag(const msgpack::object& response) {
+    const msgpack::object* payload_obj = find_key(response, "payload");
+    if (!payload_obj || payload_obj->type != msgpack::type::MAP) {
+        return false;
+    }
+    const msgpack::object* success_obj = find_key(*payload_obj, "success");
+    if (!success_obj || success_obj->type != msgpack::type::BOOLEAN) {
+        return false;
+    }
+    return success_obj->via.boolean;
+}
+
+class LoggingEnvironment final : public ::testing::Environment {
+public:
+    void SetUp() override {
+        static std::once_flag once;
+        std::call_once(once, []() { init_logging("../src/log4cplus.ini"); });
+    }
+};
+
+::testing::Environment* const kLoggingEnvironment = ::testing::AddGlobalTestEnvironment(new LoggingEnvironment());
+
 } // namespace
 
 TEST(ActionServer, StartMissingPayloadReturnsError) {
@@ -80,6 +104,26 @@ TEST(ActionServer, LoadModelMissingPayloadReturnsError) {
     execute_action("server.load_model", context, dummy, false, response);
 
     EXPECT_EQ(get_error_message(response), "Missing payload");
+}
+
+TEST(ActionServer, LoadModelMissingPayloadReturnsSuccess) {
+    BackendContext context;
+
+    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+        pk.pack_map(1);
+        pk.pack("model");
+        pk.pack_map(2);
+        pk.pack("name");
+        pk.pack("IED");
+        pk.pack("logical_devices");
+        pk.pack_map(0);
+    });
+
+    msgpack::object response;
+    execute_action("server.load_model", context, payload_handle.get(), true, response);
+
+    EXPECT_TRUE(get_success_flag(response));
+    EXPECT_EQ(get_error_message(response), "");
 }
 
 TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
