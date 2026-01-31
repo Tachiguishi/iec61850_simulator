@@ -23,7 +23,8 @@ from typing import List, Optional, Any
 from .data_model import (
 	IED, AccessPoint, LogicalDevice, LogicalNode, DataObject, DataAttribute, 
 	DataType, FunctionalConstraint, DataSet, ReportControl, GSEControl, 
-	SampledValueControl, LogControl, SettingGroupControl
+	SampledValueControl, LogControl, SettingGroupControl,
+	CommunicationParams, GSEAddress, SMVAddress
 )
 from loguru import logger
 
@@ -31,6 +32,7 @@ class SCDParser:
 	def __init__(self):
 		self._root = None
 		self._dataTypeTemplate_element = None
+		self._communication_element = None  # Communication 节点缓存
 
 	def parse(self, scd_path: Union[str, Path]) -> List[IED]:
 		"""
@@ -50,11 +52,14 @@ class SCDParser:
 			
 			loaded_ieds = []
 			self._dataTypeTemplate_element = self._find_element(root, 'DataTypeTemplates')
+			self._communication_element = self._find_element(root, 'Communication')
 
 			# 使用通配符方式查找 IED 元素，忽略命名空间
 			for ied_elem in root.findall('./{*}IED'):
 				ied = self._parse_ied_from_scd(ied_elem)
 				if ied:
+					# 解析通信参数并关联到 AccessPoint
+					self._apply_communication_params(ied)
 					loaded_ieds.append(ied)
 			
 			return loaded_ieds
@@ -856,3 +861,218 @@ class SCDParser:
 				return elem
 		
 		return None
+
+	# =========================================================================
+	# Communication 解析方法
+	# =========================================================================
+	
+	def _apply_communication_params(self, ied: IED) -> None:
+		"""
+		将 Communication 节点中的通信参数应用到 IED 的 AccessPoint
+		
+		SCD Communication 结构:
+		<Communication>
+			<SubNetwork name="..." type="...">
+				<ConnectedAP iedName="IED1" apName="AP1">
+					<Address>
+						<P type="IP">192.168.1.1</P>
+						<P type="IP-SUBNET">255.255.255.0</P>
+						<P type="OSI-AP-Title">1,3,9999,33</P>
+						<P type="OSI-AE-Qualifier">33</P>
+					</Address>
+					<GSE ldInst="LD0" cbName="GoCB01">
+						<Address>
+							<P type="MAC-Address">01-0C-CD-01-00-01</P>
+							<P type="APPID">0001</P>
+							<P type="VLAN-PRIORITY">4</P>
+							<P type="VLAN-ID">000</P>
+						</Address>
+					</GSE>
+					<SMV ldInst="LD0" cbName="MsvCB01">
+						<Address>
+							<P type="MAC-Address">01-0C-CD-04-00-01</P>
+							<P type="APPID">4001</P>
+							<P type="VLAN-PRIORITY">4</P>
+							<P type="VLAN-ID">000</P>
+						</Address>
+					</SMV>
+				</ConnectedAP>
+			</SubNetwork>
+		</Communication>
+		
+		Args:
+			ied: IED 对象
+		"""
+		if self._communication_element is None:
+			return
+		
+		ied_name = ied.name
+		
+		# 遍历所有 SubNetwork
+		for subnet in self._findall_elements(self._communication_element, 'SubNetwork'):
+			# 遍历所有 ConnectedAP
+			for conn_ap in self._findall_elements(subnet, 'ConnectedAP'):
+				if conn_ap.get('iedName') != ied_name:
+					continue
+				
+				ap_name = conn_ap.get('apName', 'AP1')
+				access_point = ied.access_points.get(ap_name)
+				if not access_point:
+					logger.debug(f"AccessPoint {ap_name} not found for IED {ied_name}")
+					continue
+				
+				# 解析 Address 节点
+				address_elem = self._find_element(conn_ap, 'Address')
+				if address_elem is not None:
+					comm_params = self._parse_address_params(address_elem)
+					access_point.communication_params = comm_params
+					logger.debug(f"Parsed communication params for {ied_name}/{ap_name}: IP={comm_params.ip_address}")
+				
+				# 解析 GSE 地址
+				for gse_elem in self._findall_elements(conn_ap, 'GSE'):
+					ld_inst = gse_elem.get('ldInst', '')
+					cb_name = gse_elem.get('cbName', '')
+					gse_key = f"{ld_inst}/{cb_name}" if ld_inst else cb_name
+					
+					gse_addr_elem = self._find_element(gse_elem, 'Address')
+					if gse_addr_elem is not None:
+						gse_address = self._parse_gse_address(gse_addr_elem)
+						access_point.gse_addresses[gse_key] = gse_address
+						logger.debug(f"Parsed GSE address for {ied_name}/{ap_name}/{gse_key}: MAC={gse_address.mac_address}")
+				
+				# 解析 SMV 地址
+				for smv_elem in self._findall_elements(conn_ap, 'SMV'):
+					ld_inst = smv_elem.get('ldInst', '')
+					cb_name = smv_elem.get('cbName', '')
+					smv_key = f"{ld_inst}/{cb_name}" if ld_inst else cb_name
+					
+					smv_addr_elem = self._find_element(smv_elem, 'Address')
+					if smv_addr_elem is not None:
+						smv_address = self._parse_smv_address(smv_addr_elem)
+						access_point.smv_addresses[smv_key] = smv_address
+						logger.debug(f"Parsed SMV address for {ied_name}/{ap_name}/{smv_key}: MAC={smv_address.mac_address}")
+	
+	def _parse_address_params(self, address_elem: ET.Element) -> CommunicationParams:
+		"""
+		解析 Address 节点中的通信参数
+		
+		支持的 P 类型:
+		- IP: IP地址
+		- IP-SUBNET: 子网掩码
+		- IP-GATEWAY: 网关地址
+		- OSI-AP-Title: OSI应用进程标题
+		- OSI-AE-Qualifier: OSI应用实体限定符
+		- OSI-PSEL: OSI表示选择器
+		- OSI-SSEL: OSI会话选择器
+		- OSI-TSEL: OSI传输选择器
+		
+		Args:
+			address_elem: Address XML 元素
+			
+		Returns:
+			CommunicationParams 对象
+		"""
+		params = CommunicationParams()
+		
+		for p_elem in self._findall_elements(address_elem, 'P'):
+			p_type = p_elem.get('type', '').upper()
+			p_value = p_elem.text.strip() if p_elem.text else ''
+			
+			if p_type == 'IP':
+				params.ip_address = p_value
+			elif p_type == 'IP-SUBNET':
+				params.ip_subnet = p_value
+			elif p_type == 'OSI-AP-TITLE':
+				params.osi_ap_title = p_value
+			elif p_type == 'OSI-AE-QUALIFIER':
+				try:
+					params.osi_ae_qualifier = int(p_value)
+				except ValueError:
+					params.osi_ae_qualifier = 0
+		
+		return params
+	
+	def _parse_gse_address(self, address_elem: ET.Element) -> GSEAddress:
+		"""
+		解析 GSE/Address 节点中的 GOOSE 地址参数
+		
+		支持的 P 类型:
+		- MAC-Address: 目标MAC地址 (如 01-0C-CD-01-00-01)
+		- APPID: 应用标识符 (如 0001)
+		- VLAN-PRIORITY: VLAN优先级 (0-7)
+		- VLAN-ID: VLAN ID
+		
+		Args:
+			address_elem: Address XML 元素
+			
+		Returns:
+			GSEAddress 对象
+		"""
+		gse_addr = GSEAddress()
+		
+		for p_elem in self._findall_elements(address_elem, 'P'):
+			p_type = p_elem.get('type', '').upper()
+			p_value = p_elem.text.strip() if p_elem.text else ''
+			
+			if p_type == 'MAC-ADDRESS':
+				gse_addr.mac_address = p_value
+			elif p_type == 'APPID':
+				gse_addr.appid = p_value
+			elif p_type == 'VLAN-PRIORITY':
+				try:
+					gse_addr.vlan_priority = int(p_value)
+				except ValueError:
+					gse_addr.vlan_priority = 4
+			elif p_type == 'VLAN-ID':
+				try:
+					# VLAN-ID 可能是十六进制或十进制
+					if p_value.startswith('0x') or p_value.startswith('0X'):
+						gse_addr.vlan_id = int(p_value, 16)
+					else:
+						gse_addr.vlan_id = int(p_value)
+				except ValueError:
+					gse_addr.vlan_id = 0
+		
+		return gse_addr
+	
+	def _parse_smv_address(self, address_elem: ET.Element) -> SMVAddress:
+		"""
+		解析 SMV/Address 节点中的采样值地址参数
+		
+		支持的 P 类型:
+		- MAC-Address: 目标MAC地址 (如 01-0C-CD-04-00-01)
+		- APPID: 应用标识符 (如 4001)
+		- VLAN-PRIORITY: VLAN优先级 (0-7)
+		- VLAN-ID: VLAN ID
+		
+		Args:
+			address_elem: Address XML 元素
+			
+		Returns:
+			SMVAddress 对象
+		"""
+		smv_addr = SMVAddress()
+		
+		for p_elem in self._findall_elements(address_elem, 'P'):
+			p_type = p_elem.get('type', '').upper()
+			p_value = p_elem.text.strip() if p_elem.text else ''
+			
+			if p_type == 'MAC-ADDRESS':
+				smv_addr.mac_address = p_value
+			elif p_type == 'APPID':
+				smv_addr.appid = p_value
+			elif p_type == 'VLAN-PRIORITY':
+				try:
+					smv_addr.vlan_priority = int(p_value)
+				except ValueError:
+					smv_addr.vlan_priority = 4
+			elif p_type == 'VLAN-ID':
+				try:
+					if p_value.startswith('0x') or p_value.startswith('0X'):
+						smv_addr.vlan_id = int(p_value, 16)
+					else:
+						smv_addr.vlan_id = int(p_value)
+				except ValueError:
+					smv_addr.vlan_id = 0
+		
+		return smv_addr

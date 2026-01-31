@@ -377,6 +377,14 @@ bool handle_server_action(
             max_conn = static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10));
         }
 
+        // 解析 IP 地址 - 优先从 config 中获取，支持从 SCD Communication 节点解析的地址
+        std::string ip_address = "0.0.0.0";
+        if (auto ip_obj = ipc::codec::find_key(*config_obj, "ip_address")) {
+            ip_address = ipc::codec::as_string(*ip_obj, "0.0.0.0");
+        }
+        
+        LOG4CPLUS_INFO(server_logger(), "Server will bind to IP: " << ip_address << " port: " << port);
+
         if (use_instance) {
             // 多实例模式
             auto* inst = context.get_or_create_server_instance(instance_id);
@@ -403,11 +411,18 @@ bool handle_server_action(
             inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
             IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
             
+            // 设置本地 IP 地址
+            if (ip_address != "0.0.0.0") {
+                IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
+                LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " bound to IP: " << ip_address);
+            }
+            
             inst->port = port;
+            inst->ip_address = ip_address;
             IedServer_start(inst->server, port);
             inst->running = true;
             
-            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on port " << port);
+            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port);
             
             pk.pack("payload");
             pk.pack_map(2);
@@ -441,9 +456,15 @@ bool handle_server_action(
             context.server = IedServer_createWithConfig(context.server_model, nullptr, context.server_config);
             IedServer_setConnectionIndicationHandler(context.server, on_connection_event_default, &context);
 
+            // 设置本地 IP 地址
+            if (ip_address != "0.0.0.0") {
+                IedServer_setLocalIpAddress(context.server, ip_address.c_str());
+                LOG4CPLUS_INFO(server_logger(), "Server bound to IP: " << ip_address);
+            }
+
             IedServer_start(context.server, port);
 
-            LOG4CPLUS_INFO(server_logger(), "Server started on port " << port);
+            LOG4CPLUS_INFO(server_logger(), "Server started on " << ip_address << ":" << port);
 
             pk.pack("payload");
             ipc::codec::pack_success_payload(pk);

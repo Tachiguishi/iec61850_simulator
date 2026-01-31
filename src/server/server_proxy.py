@@ -103,14 +103,27 @@ class IEC61850ServerProxy:
 
         self._set_state(ServerState.STARTING)
         try:
+            # 从 IED 通信参数中获取 IP 地址，如果有的话覆盖配置
+            effective_ip = self.config.ip_address
+            if self.ied:
+                for ap in self.ied.access_points.values():
+                    if ap.communication_params and ap.communication_params.ip_address:
+                        effective_ip = ap.communication_params.ip_address
+                        self._log("info", f"Using IP from SCD: {effective_ip}")
+                        break
+
             payload = {
                 "instance_id": self.instance_id,
                 "config": asdict(self.config),
                 "model": self.ied.to_dict() if self.ied else {},
             }
+            # 如果从 SCD 获取到 IP，覆盖 config 中的 ip_address
+            if effective_ip != self.config.ip_address:
+                payload["config"]["ip_address"] = effective_ip
+            
             self._ipc.request("server.start", payload)
             self._set_state(ServerState.RUNNING)
-            self._log("info", f"Server started on {self.config.ip_address}:{self.config.port}")
+            self._log("info", f"Server started on {effective_ip}:{self.config.port}")
             return True
         except IPCError as exc:
             self._set_state(ServerState.ERROR)
