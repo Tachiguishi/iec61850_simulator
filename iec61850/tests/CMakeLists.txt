@@ -17,6 +17,7 @@ set(CMAKE_BUILD_TYPE ${OLD_CMAKE_BUILD_TYPE} CACHE STRING "Build type" FORCE)
 
 add_executable(action_server_tests
   action_server_test.cpp
+  test_helpers.cpp
   ../src/action_server.cpp
   ../src/msgpack_codec.cpp
   ../src/logger.cpp

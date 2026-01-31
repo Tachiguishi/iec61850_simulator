@@ -3,6 +3,7 @@
 #include "action_server.hpp"
 #include "logger.hpp"
 #include "msgpack_codec.hpp"
+#include "test_helpers.hpp"
 
 #include <msgpack.hpp>
 
@@ -106,17 +107,11 @@ TEST(ActionServer, LoadModelMissingPayloadReturnsError) {
     EXPECT_EQ(get_error_message(response), "Missing payload");
 }
 
-TEST(ActionServer, LoadModelMissingPayloadReturnsSuccess) {
+TEST(ActionServer, LoadDefaultModelReturnsSuccess) {
     BackendContext context;
 
     auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pk.pack_map(1);
-        pk.pack("model");
-        pk.pack_map(2);
-        pk.pack("name");
-        pk.pack("IED");
-        pk.pack("logical_devices");
-        pk.pack_map(0);
+      pack_default_model_payload(pk);
     });
 
     msgpack::object response;
