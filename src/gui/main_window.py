@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gui.server_panel import ServerPanel
 from gui.client_panel import ClientPanel
+from gui.multi_server_panel import MultiServerPanel
+from gui.multi_client_panel import MultiClientPanel
 from gui.log_widget import LogWidget
 from backend.core_process import CoreProcessManager
 
@@ -129,13 +131,25 @@ class MainWindow(QMainWindow):
     
     def _init_panels(self):
         """初始化功能面板"""
-        # 服务端面板
-        self.server_panel = ServerPanel(self.config)
-        self.panelStack.addWidget(self.server_panel)
+        # 检查是否启用多实例模式
+        multi_instance = self.config.get("gui", {}).get("multi_instance", True)
         
-        # 客户端面板
-        self.client_panel = ClientPanel(self.config)
-        self.panelStack.addWidget(self.client_panel)
+        if multi_instance:
+            # 多实例服务端面板
+            self.server_panel = MultiServerPanel(self.config)
+            self.panelStack.addWidget(self.server_panel)
+            
+            # 多实例客户端面板
+            self.client_panel = MultiClientPanel(self.config)
+            self.panelStack.addWidget(self.client_panel)
+        else:
+            # 单实例服务端面板
+            self.server_panel = ServerPanel(self.config)
+            self.panelStack.addWidget(self.server_panel)
+            
+            # 单实例客户端面板
+            self.client_panel = ClientPanel(self.config)
+            self.panelStack.addWidget(self.client_panel)
         
         # 日志面板
         self.log_widget = LogWidget()

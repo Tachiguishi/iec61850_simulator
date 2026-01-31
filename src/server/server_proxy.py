@@ -54,11 +54,14 @@ class IEC61850ServerProxy:
     """
     Server proxy for GUI. Keeps a local IED model for UI display,
     while delegating IEC61850 networking to C++ backend via IPC.
+    
+    支持多实例：每个proxy可以有独立的instance_id，用于区分不同的服务器实例。
     """
 
     def __init__(self, config: Optional[ServerConfig], socket_path: str, timeout_ms: int = 3000):
         self.config = config or ServerConfig()
         self.state = ServerState.STOPPED
+        self.instance_id: Optional[str] = None  # 实例ID，用于多实例支持
 
         self.data_model_manager = DataModelManager()
         self.ied: Optional[IED] = None
@@ -101,6 +104,7 @@ class IEC61850ServerProxy:
         self._set_state(ServerState.STARTING)
         try:
             payload = {
+                "instance_id": self.instance_id,
                 "config": asdict(self.config),
                 "model": self.ied.to_dict() if self.ied else {},
             }
@@ -119,7 +123,7 @@ class IEC61850ServerProxy:
 
         self._set_state(ServerState.STOPPING)
         try:
-            self._ipc.request("server.stop", {})
+            self._ipc.request("server.stop", {"instance_id": self.instance_id})
             self._set_state(ServerState.STOPPED)
             self._log("info", "Server stopped")
             return True
@@ -135,7 +139,7 @@ class IEC61850ServerProxy:
     def load_model(self, ied: IED) -> None:
         self.ied = ied
         try:
-            response = self._ipc.request("server.load_model", {"model": ied.to_dict()})
+            response = self._ipc.request("server.load_model", {"instance_id": self.instance_id, "model": ied.to_dict()})
             if not response.data.get("success", False):
                 raise IPCError("Backend failed to load model")
             self._log("info", f"Model loaded: {ied.name}")
@@ -151,7 +155,7 @@ class IEC61850ServerProxy:
                 da.value = value
                 da.timestamp = datetime.now()
         try:
-            response = self._ipc.request("server.set_data_value", {"reference": reference, "value": value})
+            response = self._ipc.request("server.set_data_value", {"instance_id": self.instance_id, "reference": reference, "value": value})
             if not response.data.get("success", False):
                 raise IPCError("Backend failed to set data value")
             for callback in self._data_callbacks:
@@ -163,7 +167,7 @@ class IEC61850ServerProxy:
         if not references:
             return {}
         try:
-            response = self._ipc.request("server.get_values", {"references": references})
+            response = self._ipc.request("server.get_values", {"instance_id": self.instance_id, "references": references})
             values = response.data.get("values", {})
             return values
         except IPCError as exc:
@@ -172,7 +176,7 @@ class IEC61850ServerProxy:
 
     def get_connected_clients(self) -> List[Dict[str, Any]]:
         try:
-            response = self._ipc.request("server.get_clients", {})
+            response = self._ipc.request("server.get_clients", {"instance_id": self.instance_id})
             return response.data.get("clients", [])
         except IPCError as exc:
             self._log("error", f"Get clients failed: {exc}")

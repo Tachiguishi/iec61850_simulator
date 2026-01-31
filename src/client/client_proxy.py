@@ -57,11 +57,14 @@ class DataValue:
 class IEC61850ClientProxy:
     """
     Client proxy for GUI. Delegates IEC61850 operations to C++ backend via IPC.
+    
+    支持多实例：每个proxy可以有独立的instance_id，用于区分不同的客户端实例。
     """
 
     def __init__(self, config: Optional[ClientConfig], socket_path: str, timeout_ms: int = 3000):
         self.config = config or ClientConfig()
         self.state = ClientState.DISCONNECTED
+        self.instance_id: Optional[str] = None  # 实例ID，用于多实例支持
 
         self._ipc = UDSMessageClient(socket_path, timeout_ms)
 
@@ -94,6 +97,7 @@ class IEC61850ClientProxy:
         self._set_state(ClientState.CONNECTING)
         try:
             payload = {
+                "instance_id": self.instance_id,
                 "host": host,
                 "port": port,
                 "name": name,
@@ -114,7 +118,7 @@ class IEC61850ClientProxy:
 
         self._set_state(ClientState.DISCONNECTING)
         try:
-            self._ipc.request("client.disconnect", {})
+            self._ipc.request("client.disconnect", {"instance_id": self.instance_id})
             self._set_state(ClientState.DISCONNECTED)
             self._log("info", "Disconnected")
             return True
@@ -132,7 +136,7 @@ class IEC61850ClientProxy:
 
     def browse_data_model(self) -> Optional[Dict[str, Any]]:
         try:
-            response = self._ipc.request("client.browse", {})
+            response = self._ipc.request("client.browse", {"instance_id": self.instance_id})
             return response.data.get("model")
         except IPCError as exc:
             self._log("error", f"Browse failed: {exc}")
@@ -140,7 +144,7 @@ class IEC61850ClientProxy:
 
     def read_value(self, reference: str) -> Optional[DataValue]:
         try:
-            response = self._ipc.request("client.read", {"reference": reference})
+            response = self._ipc.request("client.read", {"instance_id": self.instance_id, "reference": reference})
             info = response.data.get("value", {})
             return self._to_data_value(reference, info)
         except IPCError as exc:
@@ -151,7 +155,7 @@ class IEC61850ClientProxy:
         if not references:
             return {}
         try:
-            response = self._ipc.request("client.read_batch", {"references": references})
+            response = self._ipc.request("client.read_batch", {"instance_id": self.instance_id, "references": references})
             values = response.data.get("values", {})
             return {ref: self._to_data_value(ref, info) for ref, info in values.items()}
         except IPCError as exc:
@@ -160,7 +164,7 @@ class IEC61850ClientProxy:
 
     def write_value(self, reference: str, value: Any) -> bool:
         try:
-            response = self._ipc.request("client.write", {"reference": reference, "value": value})
+            response = self._ipc.request("client.write", {"instance_id": self.instance_id, "reference": reference, "value": value})
             return bool(response.data.get("success", False))
         except IPCError as exc:
             self._log("error", f"Write failed: {exc}")

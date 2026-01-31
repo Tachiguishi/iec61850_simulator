@@ -27,36 +27,53 @@
 
 > `error` 为空或不存在表示成功。
 
+## 多实例支持
+
+为支持同时运行多个Server或Client实例，所有动作的payload中都可以包含 `instance_id` 字段用于标识目标实例。
+
+- `instance_id`: 可选字符串，用于标识特定实例
+- 如果未提供 `instance_id`，后端将使用默认实例或创建新实例
+- 后端需要维护实例ID到实际Server/Client对象的映射
+
 ## 动作列表
 ### Server
 - `server.start`
-  - payload: `{ config: {...}, model: {...} }`
-  - response.payload: `{ success: true }`
+  - payload: `{ instance_id?: string, config: {...}, model: {...} }`
+  - response.payload: `{ success: true, instance_id: string }`
 - `server.stop`
-  - payload: `{}`
+  - payload: `{ instance_id?: string }`
 - `server.load_model`
-  - payload: `{ model: {...} }`
+  - payload: `{ instance_id?: string, model: {...} }`
 - `server.set_data_value`
-  - payload: `{ reference: "IED1/LD0/..", value: <any> }`
+  - payload: `{ instance_id?: string, reference: "IED1/LD0/..", value: <any> }`
 - `server.get_values`
-  - payload: `{ references: ["..."] }`
+  - payload: `{ instance_id?: string, references: ["..."] }`
   - response.payload: `{ values: { ref: { value, quality, timestamp } } }`
 - `server.get_clients`
+  - payload: `{ instance_id?: string }`
   - response.payload: `{ clients: [ { id, connected_at } ] }`
+- `server.list_instances` (新增)
+  - payload: `{}`
+  - response.payload: `{ instances: [ { instance_id, state, port, ied_name } ] }`
 
 ### Client
 - `client.connect`
-  - payload: `{ host, port, name, config }`
+  - payload: `{ instance_id?: string, host, port, name, config }`
+  - response.payload: `{ success: true, instance_id: string }`
 - `client.disconnect`
-  - payload: `{}`
+  - payload: `{ instance_id?: string }`
 - `client.browse`
+  - payload: `{ instance_id?: string }`
   - response.payload: `{ model: {...} }`
 - `client.read`
-  - payload: `{ reference }`
+  - payload: `{ instance_id?: string, reference }`
   - response.payload: `{ value: { value, quality, timestamp, error } }`
 - `client.read_batch`
-  - payload: `{ references: [...] }`
+  - payload: `{ instance_id?: string, references: [...] }`
   - response.payload: `{ values: { ref: { value, quality, timestamp, error } } }`
 - `client.write`
-  - payload: `{ reference, value }`
+  - payload: `{ instance_id?: string, reference, value }`
   - response.payload: `{ success: true }`
+- `client.list_instances` (新增)
+  - payload: `{}`
+  - response.payload: `{ instances: [ { instance_id, state, target_host, target_port } ] }`

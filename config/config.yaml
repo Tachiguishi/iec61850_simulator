@@ -95,6 +95,9 @@ logging:
 
 # GUI设置
 gui:
+  # 多实例模式
+  multi_instance: true  # true启用多实例面板，false使用单实例面板
+  
   window:
     width: 1400
     height: 900

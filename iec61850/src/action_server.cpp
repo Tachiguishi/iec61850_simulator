@@ -23,6 +23,14 @@ std::string now_iso() {
     return buffer;
 }
 
+// 从payload中提取instance_id，如果未提供则返回空字符串（使用默认实例）
+std::string extract_instance_id(const msgpack::object& payload) {
+    if (auto id_obj = ipc::codec::find_key(payload, "instance_id")) {
+        return ipc::codec::as_string(*id_obj, "");
+    }
+    return "";
+}
+
 FunctionalConstraint map_fc(const std::string& fc) {
     if (fc == "ST") return IEC61850_FC_ST;
     if (fc == "MX") return IEC61850_FC_MX;
@@ -188,6 +196,22 @@ IedModel* build_model_from_dict(const msgpack::object& model_obj, std::string& o
 }
 
 void on_connection_event(IedServer, ClientConnection connection, bool connected, void* param) {
+    auto* ctx = static_cast<ServerInstanceContext*>(param);
+    
+    std::string peer = ClientConnection_getPeerAddress(connection) ? ClientConnection_getPeerAddress(connection) : "unknown";
+    std::string id = peer;
+    if (connected) {
+        ctx->clients.push_back({id, now_iso()});
+    } else {
+        ctx->clients.erase(
+            std::remove_if(ctx->clients.begin(), ctx->clients.end(),
+                           [&](const ClientInfo& info) { return info.id == id; }),
+            ctx->clients.end());
+    }
+}
+
+// 保留用于默认实例的回调（向后兼容）
+void on_connection_event_default(IedServer, ClientConnection connection, bool connected, void* param) {
     auto* ctx = static_cast<BackendContext*>(param);
     std::lock_guard<std::mutex> lock(ctx->mutex);
 
@@ -315,9 +339,14 @@ bool handle_server_action(
     const msgpack::object& payload,
     bool has_payload,
     msgpack::packer<msgpack::sbuffer>& pk) {
+    
+    // 提取instance_id，如果为空则使用默认实例
+    std::string instance_id = has_payload ? extract_instance_id(payload) : "";
+    bool use_instance = !instance_id.empty();
+    
     if (action == "server.start") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(server_logger(), "server.start requested");
+        LOG4CPLUS_INFO(server_logger(), "server.start requested" << (use_instance ? " for instance " + instance_id : ""));
         if (!has_payload || payload.type != msgpack::type::MAP) {
             LOG4CPLUS_ERROR(server_logger(), "server.start missing payload");
             pk.pack("payload");
@@ -338,64 +367,132 @@ bool handle_server_action(
             return true;
         }
 
-        if (context.server) {
-            IedServer_stop(context.server);
-            IedServer_destroy(context.server);
-            context.server = nullptr;
-        }
-        if (context.server_config) {
-            IedServerConfig_destroy(context.server_config);
-            context.server_config = nullptr;
-        }
-        if (context.server_model) {
-            IedModel_destroy(context.server_model);
-            context.server_model = nullptr;
-        }
-
-        std::string ied_name;
-        context.server_model = build_model_from_dict(*model_obj, ied_name);
-        context.server_config = IedServerConfig_create();
-
-        if (auto max_conn_obj = ipc::codec::find_key(*config_obj, "max_connections")) {
-            IedServerConfig_setMaxMmsConnections(context.server_config, static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10)));
-        }
-
-        context.server = IedServer_createWithConfig(context.server_model, nullptr, context.server_config);
-        IedServer_setConnectionIndicationHandler(context.server, on_connection_event, &context);
-
         int port = 102;
         if (auto port_obj = ipc::codec::find_key(*config_obj, "port")) {
             port = static_cast<int>(ipc::codec::as_int64(*port_obj, 102));
         }
-        IedServer_start(context.server, port);
+        
+        int max_conn = 10;
+        if (auto max_conn_obj = ipc::codec::find_key(*config_obj, "max_connections")) {
+            max_conn = static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10));
+        }
 
-        LOG4CPLUS_INFO(server_logger(), "Server started on port " << port);
+        if (use_instance) {
+            // 多实例模式
+            auto* inst = context.get_or_create_server_instance(instance_id);
+            
+            // 清理旧资源
+            if (inst->server) {
+                IedServer_stop(inst->server);
+                IedServer_destroy(inst->server);
+                inst->server = nullptr;
+            }
+            if (inst->config) {
+                IedServerConfig_destroy(inst->config);
+                inst->config = nullptr;
+            }
+            if (inst->model) {
+                IedModel_destroy(inst->model);
+                inst->model = nullptr;
+            }
+            
+            inst->model = build_model_from_dict(*model_obj, inst->ied_name);
+            inst->config = IedServerConfig_create();
+            IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
+            
+            inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
+            IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
+            
+            inst->port = port;
+            IedServer_start(inst->server, port);
+            inst->running = true;
+            
+            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on port " << port);
+            
+            pk.pack("payload");
+            pk.pack_map(2);
+            pk.pack("success");
+            pk.pack(true);
+            pk.pack("instance_id");
+            pk.pack(instance_id);
+            pk.pack("error");
+            pk.pack_nil();
+        } else {
+            // 默认实例模式（向后兼容）
+            if (context.server) {
+                IedServer_stop(context.server);
+                IedServer_destroy(context.server);
+                context.server = nullptr;
+            }
+            if (context.server_config) {
+                IedServerConfig_destroy(context.server_config);
+                context.server_config = nullptr;
+            }
+            if (context.server_model) {
+                IedModel_destroy(context.server_model);
+                context.server_model = nullptr;
+            }
 
-        pk.pack("payload");
-        ipc::codec::pack_success_payload(pk);
-        pk.pack("error");
-        pk.pack_nil();
+            std::string ied_name;
+            context.server_model = build_model_from_dict(*model_obj, ied_name);
+            context.server_config = IedServerConfig_create();
+            IedServerConfig_setMaxMmsConnections(context.server_config, max_conn);
+
+            context.server = IedServer_createWithConfig(context.server_model, nullptr, context.server_config);
+            IedServer_setConnectionIndicationHandler(context.server, on_connection_event_default, &context);
+
+            IedServer_start(context.server, port);
+
+            LOG4CPLUS_INFO(server_logger(), "Server started on port " << port);
+
+            pk.pack("payload");
+            ipc::codec::pack_success_payload(pk);
+            pk.pack("error");
+            pk.pack_nil();
+        }
         return true;
     }
 
     if (action == "server.stop") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(server_logger(), "server.stop requested");
+        LOG4CPLUS_INFO(server_logger(), "server.stop requested" << (use_instance ? " for instance " + instance_id : ""));
 
-        if (context.server) {
-            IedServer_stop(context.server);
-            IedServer_destroy(context.server);
-            context.server = nullptr;
+        if (use_instance) {
+            auto* inst = context.get_server_instance(instance_id);
+            if (inst) {
+                if (inst->server) {
+                    IedServer_stop(inst->server);
+                    IedServer_destroy(inst->server);
+                    inst->server = nullptr;
+                }
+                if (inst->config) {
+                    IedServerConfig_destroy(inst->config);
+                    inst->config = nullptr;
+                }
+                if (inst->model) {
+                    IedModel_destroy(inst->model);
+                    inst->model = nullptr;
+                }
+                inst->clients.clear();
+                inst->running = false;
+                context.remove_server_instance(instance_id);
+            }
+        } else {
+            if (context.server) {
+                IedServer_stop(context.server);
+                IedServer_destroy(context.server);
+                context.server = nullptr;
+            }
+            if (context.server_config) {
+                IedServerConfig_destroy(context.server_config);
+                context.server_config = nullptr;
+            }
+            if (context.server_model) {
+                IedModel_destroy(context.server_model);
+                context.server_model = nullptr;
+            }
+            context.clients.clear();
         }
-        if (context.server_config) {
-            IedServerConfig_destroy(context.server_config);
-            context.server_config = nullptr;
-        }
-        if (context.server_model) {
-            IedModel_destroy(context.server_model);
-            context.server_model = nullptr;
-        }
-        context.clients.clear();
 
         pk.pack("payload");
         ipc::codec::pack_success_payload(pk);
@@ -418,11 +515,19 @@ bool handle_server_action(
         }
 
         if (auto model_obj = ipc::codec::find_key(payload, "model")) {
-            if (context.server_model) {
-                IedModel_destroy(context.server_model);
+            if (use_instance) {
+                auto* inst = context.get_or_create_server_instance(instance_id);
+                if (inst->model) {
+                    IedModel_destroy(inst->model);
+                }
+                inst->model = build_model_from_dict(*model_obj, inst->ied_name);
+            } else {
+                if (context.server_model) {
+                    IedModel_destroy(context.server_model);
+                }
+                std::string ied_name;
+                context.server_model = build_model_from_dict(*model_obj, ied_name);
             }
-            std::string ied_name;
-            context.server_model = build_model_from_dict(*model_obj, ied_name);
             pk.pack("payload");
             ipc::codec::pack_success_payload(pk);
             pk.pack("error");
@@ -440,7 +545,22 @@ bool handle_server_action(
         std::lock_guard<std::mutex> lock(context.mutex);
         auto ref_obj = ipc::codec::find_key(payload, "reference");
         auto value_obj = ipc::codec::find_key(payload, "value");
-        if (!context.server || !context.server_model || !ref_obj || !value_obj) {
+        
+        IedServer server = nullptr;
+        IedModel* model = nullptr;
+        
+        if (use_instance) {
+            auto* inst = context.get_server_instance(instance_id);
+            if (inst) {
+                server = inst->server;
+                model = inst->model;
+            }
+        } else {
+            server = context.server;
+            model = context.server_model;
+        }
+        
+        if (!server || !model || !ref_obj || !value_obj) {
             LOG4CPLUS_ERROR(server_logger(), "server.set_data_value invalid request");
             pk.pack("payload");
             pk.pack_map(0);
@@ -451,12 +571,12 @@ bool handle_server_action(
 
         std::string reference = ipc::codec::as_string(*ref_obj, "");
         LOG4CPLUS_DEBUG(server_logger(), "Update value: " << reference);
-        ModelNode* node = IedModel_getModelNodeByObjectReference(context.server_model, reference.c_str());
+        ModelNode* node = IedModel_getModelNodeByObjectReference(model, reference.c_str());
         if (node && ModelNode_getType(node) == DataAttributeModelType) {
             auto* da = reinterpret_cast<DataAttribute*>(node);
-            IedServer_lockDataModel(context.server);
-            update_attribute_value(context.server, da, *value_obj);
-            IedServer_unlockDataModel(context.server);
+            IedServer_lockDataModel(server);
+            update_attribute_value(server, da, *value_obj);
+            IedServer_unlockDataModel(server);
         }
 
         pk.pack("payload");
@@ -469,7 +589,22 @@ bool handle_server_action(
     if (action == "server.get_values") {
         std::lock_guard<std::mutex> lock(context.mutex);
         auto refs_obj = ipc::codec::find_key(payload, "references");
-        if (!context.server || !context.server_model || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
+        
+        IedServer server = nullptr;
+        IedModel* model = nullptr;
+        
+        if (use_instance) {
+            auto* inst = context.get_server_instance(instance_id);
+            if (inst) {
+                server = inst->server;
+                model = inst->model;
+            }
+        } else {
+            server = context.server;
+            model = context.server_model;
+        }
+        
+        if (!server || !model || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
             LOG4CPLUS_ERROR(server_logger(), "server.get_values invalid request");
             pk.pack("payload");
             pk.pack_map(0);
@@ -486,9 +621,9 @@ bool handle_server_action(
         for (uint32_t i = 0; i < refs_obj->via.array.size; ++i) {
             std::string reference = ipc::codec::as_string(refs_obj->via.array.ptr[i]);
             pk.pack(reference);
-            ModelNode* node = IedModel_getModelNodeByObjectReference(context.server_model, reference.c_str());
+            ModelNode* node = IedModel_getModelNodeByObjectReference(model, reference.c_str());
             if (node && ModelNode_getType(node) == DataAttributeModelType) {
-                pack_attribute_value(pk, context.server, reinterpret_cast<DataAttribute*>(node));
+                pack_attribute_value(pk, server, reinterpret_cast<DataAttribute*>(node));
             } else {
                 pk.pack_map(3);
                 pk.pack("value");
@@ -508,17 +643,59 @@ bool handle_server_action(
     if (action == "server.get_clients") {
         std::lock_guard<std::mutex> lock(context.mutex);
         LOG4CPLUS_DEBUG(server_logger(), "server.get_clients requested");
+        
+        std::vector<ClientInfo>* clients = nullptr;
+        
+        if (use_instance) {
+            auto* inst = context.get_server_instance(instance_id);
+            if (inst) {
+                clients = &inst->clients;
+            }
+        } else {
+            clients = &context.clients;
+        }
+        
         pk.pack("payload");
         pk.pack_map(1);
         pk.pack("clients");
-        pk.pack_array(context.clients.size());
-        for (const auto& client : context.clients) {
-            pk.pack_map(2);
-            pk.pack("id");
-            pk.pack(client.id);
-            pk.pack("connected_at");
-            pk.pack(client.connected_at);
+        if (clients) {
+            pk.pack_array(clients->size());
+            for (const auto& client : *clients) {
+                pk.pack_map(2);
+                pk.pack("id");
+                pk.pack(client.id);
+                pk.pack("connected_at");
+                pk.pack(client.connected_at);
+            }
+        } else {
+            pk.pack_array(0);
         }
+        pk.pack("error");
+        pk.pack_nil();
+        return true;
+    }
+    
+    if (action == "server.list_instances") {
+        std::lock_guard<std::mutex> lock(context.mutex);
+        LOG4CPLUS_DEBUG(server_logger(), "server.list_instances requested");
+        
+        pk.pack("payload");
+        pk.pack_map(1);
+        pk.pack("instances");
+        pk.pack_array(context.server_instances.size());
+        
+        for (const auto& [id, inst] : context.server_instances) {
+            pk.pack_map(4);
+            pk.pack("instance_id");
+            pk.pack(id);
+            pk.pack("state");
+            pk.pack(inst->running ? "RUNNING" : "STOPPED");
+            pk.pack("port");
+            pk.pack(inst->port);
+            pk.pack("ied_name");
+            pk.pack(inst->ied_name);
+        }
+        
         pk.pack("error");
         pk.pack_nil();
         return true;
