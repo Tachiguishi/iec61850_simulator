@@ -13,3 +13,44 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 set(CMAKE_BUILD_TYPE ${OLD_CMAKE_BUILD_TYPE} CACHE STRING "Build type" FORCE)
+
+add_executable(action_server_tests
+  action_server_test.cpp
+  ../src/action_server.cpp
+  ../src/msgpack_codec.cpp
+  ../src/logger.cpp
+)
+
+add_compile_definitions(
+  MSGPACK_NO_BOOST
+)
+
+target_include_directories(action_server_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  ${libiec61850_SOURCE_DIR}/src/iec61850/inc
+  ${libiec61850_SOURCE_DIR}/src/common/inc
+  ${libiec61850_SOURCE_DIR}/src/mms/inc
+  ${libiec61850_SOURCE_DIR}/src/logging
+  ${libiec61850_SOURCE_DIR}/hal/inc
+  ${msgpack_SOURCE_DIR}/include
+)
+
+target_link_libraries(action_server_tests PRIVATE
+  iec61850
+  GTest::gtest
+  GTest::gtest_main
+)
+
+if(TARGET msgpackc-cxx)
+  target_link_libraries(action_server_tests PRIVATE msgpackc-cxx)
+endif()
+
+if(TARGET log4cplus::log4cplus)
+  target_link_libraries(action_server_tests PRIVATE log4cplus::log4cplus)
+elseif(TARGET log4cplus)
+  target_link_libraries(action_server_tests PRIVATE log4cplus)
+endif()
+
+include(GoogleTest)
+gtest_discover_tests(action_server_tests)
