@@ -18,8 +18,9 @@ sudo setcap 'cap_net_bind_service,cap_net_raw,cap_net_admin=+ep' $(which python3
 [ 通信进程 ]
   - MMS :102
   - GOOSE
-  - cap_net_raw
-  - cap_net_bind_service
+  - cap_net_raw (GOOSE)
+  - cap_net_bind_service (MMS:102)
+  - cap_net_admin (set IP Address for MMS)
 ```
 
 把GUI和通信进程分离后，GUI程序就不需要任何特殊权限，可以正常使用Portal访问文件和打印对话框，也可以正常加载GTK主题和窗口装饰。

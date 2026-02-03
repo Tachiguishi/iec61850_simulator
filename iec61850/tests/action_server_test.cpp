@@ -125,7 +125,9 @@ TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
     BackendContext context;
 
     auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pk.pack_map(2);
+        pk.pack_map(3);
+        pk.pack("instance_id");
+        pk.pack("default_instance");
         pk.pack("reference");
         pk.pack("PROT/XCBR1.Pos.stVal");
         pk.pack("value");
@@ -142,7 +144,9 @@ TEST(ActionServer, GetValuesInvalidRequestReturnsError) {
     BackendContext context;
 
     auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pk.pack_map(1);
+        pk.pack_map(2);
+        pk.pack("instance_id");
+        pk.pack("default_instance");
         pk.pack("references");
         pk.pack_array(1);
         pk.pack("PROT/XCBR1.Pos.stVal");
@@ -156,11 +160,17 @@ TEST(ActionServer, GetValuesInvalidRequestReturnsError) {
 
 TEST(ActionServer, GetClientsReturnsPayload) {
     BackendContext context;
-    context.clients.push_back({"client-1", "2026-01-31T00:00:00Z"});
+    ServerInstanceContext* server = context.get_or_create_server_instance("server-1");
+    server->clients.push_back({"client-1", "2026-01-31T00:00:00Z"});
 
-    msgpack::object dummy;
+    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+        pk.pack_map(1);
+        pk.pack("instance_id");
+        pk.pack("server-1");
+    });
+
     msgpack::object response;
-    execute_action("server.get_clients", context, dummy, false, response);
+    execute_action("server.get_clients", context, payload_handle.get(), true, response);
 
     const msgpack::object* payload_obj = find_key(response, "payload");
     ASSERT_TRUE(payload_obj);

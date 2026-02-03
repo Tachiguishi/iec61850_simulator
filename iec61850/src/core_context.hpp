@@ -77,15 +77,6 @@ struct BackendContext {
     std::unordered_map<std::string, std::unique_ptr<ServerInstanceContext>> server_instances;
     std::unordered_map<std::string, std::unique_ptr<ClientInstanceContext>> client_instances;
     
-    // 保持向后兼容：默认实例（当未指定instance_id时使用）
-    IedModel* server_model = nullptr;
-    IedServer server = nullptr;
-    IedServerConfig server_config = nullptr;
-    std::vector<ClientInfo> clients;
-
-    IedConnection client_connection = nullptr;
-    std::string client_ied_name = "IED";
-    
     // 辅助方法：获取或创建服务器实例
     ServerInstanceContext* get_server_instance(const std::string& instance_id) {
         auto it = server_instances.find(instance_id);

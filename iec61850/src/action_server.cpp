@@ -23,10 +23,13 @@ std::string now_iso() {
     return buffer;
 }
 
-// 从payload中提取instance_id，如果未提供则返回空字符串（使用默认实例）
+// 从payload中提取instance_id，必须提供instance_id
 std::string extract_instance_id(const msgpack::object& payload) {
     if (auto id_obj = ipc::codec::find_key(payload, "instance_id")) {
-        return ipc::codec::as_string(*id_obj, "");
+        std::string id = ipc::codec::as_string(*id_obj, "");
+        if (!id.empty()) {
+            return id;
+        }
     }
     return "";
 }
@@ -210,23 +213,6 @@ void on_connection_event(IedServer, ClientConnection connection, bool connected,
     }
 }
 
-// 保留用于默认实例的回调（向后兼容）
-void on_connection_event_default(IedServer, ClientConnection connection, bool connected, void* param) {
-    auto* ctx = static_cast<BackendContext*>(param);
-    std::lock_guard<std::mutex> lock(ctx->mutex);
-
-    std::string peer = ClientConnection_getPeerAddress(connection) ? ClientConnection_getPeerAddress(connection) : "unknown";
-    std::string id = peer;
-    if (connected) {
-        ctx->clients.push_back({id, now_iso()});
-    } else {
-        ctx->clients.erase(
-            std::remove_if(ctx->clients.begin(), ctx->clients.end(),
-                           [&](const ClientInfo& info) { return info.id == id; }),
-            ctx->clients.end());
-    }
-}
-
 void pack_attribute_value(msgpack::packer<msgpack::sbuffer>& pk, IedServer server, DataAttribute* da) {
     if (!da) {
         pk.pack_map(3);
@@ -339,22 +325,33 @@ bool handle_server_action(
     const msgpack::object& payload,
     bool has_payload,
     msgpack::packer<msgpack::sbuffer>& pk) {
-    
-    // 提取instance_id，如果为空则使用默认实例
-    std::string instance_id = has_payload ? extract_instance_id(payload) : "";
-    bool use_instance = !instance_id.empty();
+
+    if (!has_payload || payload.type != msgpack::type::MAP) {
+        LOG4CPLUS_ERROR(server_logger(),  action << " missing payload");
+        pk.pack("payload");
+        pk.pack_map(0);
+        pk.pack("error");
+        ipc::codec::pack_error(pk, "Missing payload");
+        return true;
+    }
+
+    // 提取instance_id，必须提供
+    std::string instance_id = extract_instance_id(payload);
     
     if (action == "server.start") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(server_logger(), "server.start requested" << (use_instance ? " for instance " + instance_id : ""));
-        if (!has_payload || payload.type != msgpack::type::MAP) {
-            LOG4CPLUS_ERROR(server_logger(), "server.start missing payload");
+
+        // 检查instance_id是否提供
+        if (instance_id.empty()) {
+            LOG4CPLUS_ERROR(server_logger(), "server.start: instance_id is required");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
-            ipc::codec::pack_error(pk, "Missing payload");
+            ipc::codec::pack_error(pk, "instance_id is required");
             return true;
         }
+        
+        LOG4CPLUS_INFO(server_logger(), "server.start requested for instance " + instance_id);
 
         auto config_obj = ipc::codec::find_key(payload, "config");
         auto model_obj = ipc::codec::find_key(payload, "model");
@@ -385,11 +382,72 @@ bool handle_server_action(
         
         LOG4CPLUS_INFO(server_logger(), "Server will bind to IP: " << ip_address << " port: " << port);
 
-        if (use_instance) {
-            // 多实例模式
-            auto* inst = context.get_or_create_server_instance(instance_id);
-            
-            // 清理旧资源
+        // 多实例模式
+        auto* inst = context.get_or_create_server_instance(instance_id);
+        
+        // 清理旧资源
+        if (inst->server) {
+            IedServer_stop(inst->server);
+            IedServer_destroy(inst->server);
+            inst->server = nullptr;
+        }
+        if (inst->config) {
+            IedServerConfig_destroy(inst->config);
+            inst->config = nullptr;
+        }
+        if (inst->model) {
+            IedModel_destroy(inst->model);
+            inst->model = nullptr;
+        }
+        
+        inst->model = build_model_from_dict(*model_obj, inst->ied_name);
+        inst->config = IedServerConfig_create();
+        IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
+        
+        inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
+        IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
+        
+        // 设置本地 IP 地址
+        if (ip_address != "0.0.0.0") {
+            IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
+            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " bound to IP: " << ip_address);
+        }
+        
+        inst->port = port;
+        inst->ip_address = ip_address;
+        IedServer_start(inst->server, port);
+        inst->running = true;
+        
+        LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port);
+        
+        pk.pack("payload");
+        pk.pack_map(2);
+        pk.pack("success");
+        pk.pack(true);
+        pk.pack("instance_id");
+        pk.pack(instance_id);
+        pk.pack("error");
+        pk.pack_nil();
+        return true;
+    }
+
+    if (action == "server.stop") {
+        std::lock_guard<std::mutex> lock(context.mutex);
+        
+        // 检查instance_id是否提供
+        if (instance_id.empty()) {
+            LOG4CPLUS_ERROR(server_logger(), "server.stop: instance_id is required");
+            pk.pack("payload");
+            pk.pack_map(0);
+            pk.pack("error");
+            ipc::codec::pack_error(pk, "instance_id is required");
+            return true;
+        }
+        
+        LOG4CPLUS_INFO(server_logger(), "server.stop requested for instance " + instance_id);
+
+        auto* inst = context.get_server_instance(instance_id);
+        if (inst) {
             if (inst->server) {
                 IedServer_stop(inst->server);
                 IedServer_destroy(inst->server);
@@ -403,116 +461,9 @@ bool handle_server_action(
                 IedModel_destroy(inst->model);
                 inst->model = nullptr;
             }
-            
-            inst->model = build_model_from_dict(*model_obj, inst->ied_name);
-            inst->config = IedServerConfig_create();
-            IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
-            
-            inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
-            IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
-            
-            // 设置本地 IP 地址
-            if (ip_address != "0.0.0.0") {
-                IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
-                LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " bound to IP: " << ip_address);
-            }
-            
-            inst->port = port;
-            inst->ip_address = ip_address;
-            IedServer_start(inst->server, port);
-            inst->running = true;
-            
-            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port);
-            
-            pk.pack("payload");
-            pk.pack_map(2);
-            pk.pack("success");
-            pk.pack(true);
-            pk.pack("instance_id");
-            pk.pack(instance_id);
-            pk.pack("error");
-            pk.pack_nil();
-        } else {
-            // 默认实例模式（向后兼容）
-            if (context.server) {
-                IedServer_stop(context.server);
-                IedServer_destroy(context.server);
-                context.server = nullptr;
-            }
-            if (context.server_config) {
-                IedServerConfig_destroy(context.server_config);
-                context.server_config = nullptr;
-            }
-            if (context.server_model) {
-                IedModel_destroy(context.server_model);
-                context.server_model = nullptr;
-            }
-
-            std::string ied_name;
-            context.server_model = build_model_from_dict(*model_obj, ied_name);
-            context.server_config = IedServerConfig_create();
-            IedServerConfig_setMaxMmsConnections(context.server_config, max_conn);
-
-            context.server = IedServer_createWithConfig(context.server_model, nullptr, context.server_config);
-            IedServer_setConnectionIndicationHandler(context.server, on_connection_event_default, &context);
-
-            // 设置本地 IP 地址
-            if (ip_address != "0.0.0.0") {
-                IedServer_setLocalIpAddress(context.server, ip_address.c_str());
-                LOG4CPLUS_INFO(server_logger(), "Server bound to IP: " << ip_address);
-            }
-
-            IedServer_start(context.server, port);
-
-            LOG4CPLUS_INFO(server_logger(), "Server started on " << ip_address << ":" << port);
-
-            pk.pack("payload");
-            ipc::codec::pack_success_payload(pk);
-            pk.pack("error");
-            pk.pack_nil();
-        }
-        return true;
-    }
-
-    if (action == "server.stop") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(server_logger(), "server.stop requested" << (use_instance ? " for instance " + instance_id : ""));
-
-        if (use_instance) {
-            auto* inst = context.get_server_instance(instance_id);
-            if (inst) {
-                if (inst->server) {
-                    IedServer_stop(inst->server);
-                    IedServer_destroy(inst->server);
-                    inst->server = nullptr;
-                }
-                if (inst->config) {
-                    IedServerConfig_destroy(inst->config);
-                    inst->config = nullptr;
-                }
-                if (inst->model) {
-                    IedModel_destroy(inst->model);
-                    inst->model = nullptr;
-                }
-                inst->clients.clear();
-                inst->running = false;
-                context.remove_server_instance(instance_id);
-            }
-        } else {
-            if (context.server) {
-                IedServer_stop(context.server);
-                IedServer_destroy(context.server);
-                context.server = nullptr;
-            }
-            if (context.server_config) {
-                IedServerConfig_destroy(context.server_config);
-                context.server_config = nullptr;
-            }
-            if (context.server_model) {
-                IedModel_destroy(context.server_model);
-                context.server_model = nullptr;
-            }
-            context.clients.clear();
+            inst->clients.clear();
+            inst->running = false;
+            context.remove_server_instance(instance_id);
         }
 
         pk.pack("payload");
@@ -524,31 +475,25 @@ bool handle_server_action(
 
     if (action == "server.load_model") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_INFO(server_logger(), "server.load_model requested");
 
-        if (!has_payload) {
-            LOG4CPLUS_ERROR(server_logger(), "server.load_model missing payload");
+        // 检查instance_id是否提供
+        if (instance_id.empty()) {
+            LOG4CPLUS_ERROR(server_logger(), "server.load_model: instance_id is required");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
-            ipc::codec::pack_error(pk, "Missing payload");
+            ipc::codec::pack_error(pk, "instance_id is required");
             return true;
         }
+        
+        LOG4CPLUS_INFO(server_logger(), "server.load_model requested for instance " + instance_id);
 
         if (auto model_obj = ipc::codec::find_key(payload, "model")) {
-            if (use_instance) {
-                auto* inst = context.get_or_create_server_instance(instance_id);
-                if (inst->model) {
-                    IedModel_destroy(inst->model);
-                }
-                inst->model = build_model_from_dict(*model_obj, inst->ied_name);
-            } else {
-                if (context.server_model) {
-                    IedModel_destroy(context.server_model);
-                }
-                std::string ied_name;
-                context.server_model = build_model_from_dict(*model_obj, ied_name);
+            auto* inst = context.get_or_create_server_instance(instance_id);
+            if (inst->model) {
+                IedModel_destroy(inst->model);
             }
+            inst->model = build_model_from_dict(*model_obj, inst->ied_name);
             pk.pack("payload");
             ipc::codec::pack_success_payload(pk);
             pk.pack("error");
@@ -564,24 +509,22 @@ bool handle_server_action(
 
     if (action == "server.set_data_value") {
         std::lock_guard<std::mutex> lock(context.mutex);
+        
+        // 检查instance_id是否提供
+        if (instance_id.empty()) {
+            LOG4CPLUS_ERROR(server_logger(), "server.set_data_value: instance_id is required");
+            pk.pack("payload");
+            pk.pack_map(0);
+            pk.pack("error");
+            ipc::codec::pack_error(pk, "instance_id is required");
+            return true;
+        }
+        
         auto ref_obj = ipc::codec::find_key(payload, "reference");
         auto value_obj = ipc::codec::find_key(payload, "value");
         
-        IedServer server = nullptr;
-        IedModel* model = nullptr;
-        
-        if (use_instance) {
-            auto* inst = context.get_server_instance(instance_id);
-            if (inst) {
-                server = inst->server;
-                model = inst->model;
-            }
-        } else {
-            server = context.server;
-            model = context.server_model;
-        }
-        
-        if (!server || !model || !ref_obj || !value_obj) {
+        auto* inst = context.get_server_instance(instance_id);
+        if (!inst || !inst->server || !inst->model || !ref_obj || !value_obj) {
             LOG4CPLUS_ERROR(server_logger(), "server.set_data_value invalid request");
             pk.pack("payload");
             pk.pack_map(0);
@@ -592,12 +535,12 @@ bool handle_server_action(
 
         std::string reference = ipc::codec::as_string(*ref_obj, "");
         LOG4CPLUS_DEBUG(server_logger(), "Update value: " << reference);
-        ModelNode* node = IedModel_getModelNodeByObjectReference(model, reference.c_str());
+        ModelNode* node = IedModel_getModelNodeByObjectReference(inst->model, reference.c_str());
         if (node && ModelNode_getType(node) == DataAttributeModelType) {
             auto* da = reinterpret_cast<DataAttribute*>(node);
-            IedServer_lockDataModel(server);
-            update_attribute_value(server, da, *value_obj);
-            IedServer_unlockDataModel(server);
+            IedServer_lockDataModel(inst->server);
+            update_attribute_value(inst->server, da, *value_obj);
+            IedServer_unlockDataModel(inst->server);
         }
 
         pk.pack("payload");
@@ -609,23 +552,21 @@ bool handle_server_action(
 
     if (action == "server.get_values") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        auto refs_obj = ipc::codec::find_key(payload, "references");
         
-        IedServer server = nullptr;
-        IedModel* model = nullptr;
-        
-        if (use_instance) {
-            auto* inst = context.get_server_instance(instance_id);
-            if (inst) {
-                server = inst->server;
-                model = inst->model;
-            }
-        } else {
-            server = context.server;
-            model = context.server_model;
+        // 检查instance_id是否提供
+        if (instance_id.empty()) {
+            LOG4CPLUS_ERROR(server_logger(), "server.get_values: instance_id is required");
+            pk.pack("payload");
+            pk.pack_map(0);
+            pk.pack("error");
+            ipc::codec::pack_error(pk, "instance_id is required");
+            return true;
         }
         
-        if (!server || !model || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
+        auto refs_obj = ipc::codec::find_key(payload, "references");
+        
+        auto* inst = context.get_server_instance(instance_id);
+        if (!inst || !inst->server || !inst->model || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
             LOG4CPLUS_ERROR(server_logger(), "server.get_values invalid request");
             pk.pack("payload");
             pk.pack_map(0);
@@ -642,9 +583,9 @@ bool handle_server_action(
         for (uint32_t i = 0; i < refs_obj->via.array.size; ++i) {
             std::string reference = ipc::codec::as_string(refs_obj->via.array.ptr[i]);
             pk.pack(reference);
-            ModelNode* node = IedModel_getModelNodeByObjectReference(model, reference.c_str());
+            ModelNode* node = IedModel_getModelNodeByObjectReference(inst->model, reference.c_str());
             if (node && ModelNode_getType(node) == DataAttributeModelType) {
-                pack_attribute_value(pk, server, reinterpret_cast<DataAttribute*>(node));
+                pack_attribute_value(pk, inst->server, reinterpret_cast<DataAttribute*>(node));
             } else {
                 pk.pack_map(3);
                 pk.pack("value");
@@ -663,25 +604,27 @@ bool handle_server_action(
 
     if (action == "server.get_clients") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_DEBUG(server_logger(), "server.get_clients requested");
         
-        std::vector<ClientInfo>* clients = nullptr;
-        
-        if (use_instance) {
-            auto* inst = context.get_server_instance(instance_id);
-            if (inst) {
-                clients = &inst->clients;
-            }
-        } else {
-            clients = &context.clients;
+        // 检查instance_id是否提供
+        if (instance_id.empty()) {
+            LOG4CPLUS_ERROR(server_logger(), "server.get_clients: instance_id is required");
+            pk.pack("payload");
+            pk.pack_map(0);
+            pk.pack("error");
+            ipc::codec::pack_error(pk, "instance_id is required");
+            return true;
         }
+        
+        LOG4CPLUS_DEBUG(server_logger(), "server.get_clients requested for instance " + instance_id);
+        
+        auto* inst = context.get_server_instance(instance_id);
         
         pk.pack("payload");
         pk.pack_map(1);
         pk.pack("clients");
-        if (clients) {
-            pk.pack_array(clients->size());
-            for (const auto& client : *clients) {
+        if (inst) {
+            pk.pack_array(inst->clients.size());
+            for (const auto& client : inst->clients) {
                 pk.pack_map(2);
                 pk.pack("id");
                 pk.pack(client.id);

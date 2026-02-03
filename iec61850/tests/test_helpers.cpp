@@ -2,6 +2,7 @@
 
 /*
 {
+  "instance_id": "default_instance",
   "model": {
     "name": "SimulatedIED",
     "manufacturer": "IEC61850Simulator",
@@ -317,8 +318,10 @@
 }
 */
 void pack_default_model_payload(msgpack::packer<msgpack::sbuffer>& pk) {
-    pk.pack_map(1);
-    pk.pack("model");
+  pk.pack_map(2);
+  pk.pack("instance_id");
+  pk.pack("default_instance");
+  pk.pack("model");
     pk.pack_map(6);
     pk.pack("name");
     pk.pack("SimulatedIED");
@@ -331,38 +334,35 @@ void pack_default_model_payload(msgpack::packer<msgpack::sbuffer>& pk) {
     pk.pack("description");
     pk.pack("Default simulated IED");
     pk.pack("logical_devices");
-    pk.pack_map(2);
-
-    pk.pack("PROT");
-    pk.pack_map(3);
-    pk.pack("name");
-    pk.pack("PROT");
-    pk.pack("description");
-    pk.pack("Protection LD");
-    pk.pack("logical_nodes");
-    pk.pack_map(3);
-
-    pk.pack("LLN0");
-    pk.pack_map(10);
-    pk.pack("name");
-    pk.pack("LLN0");
-    pk.pack("class");
-    pk.pack("LLN0");
-    pk.pack("description");
-    pk.pack("Logical Node Zero");
-    pk.pack("data_objects");
-    pk.pack_map(2);
-
-    pk.pack("Mod");
-    pk.pack_map(4);
-    pk.pack("name");
-    pk.pack("Mod");
-    pk.pack("cdc");
-    pk.pack("ENC");
-    pk.pack("description");
-    pk.pack("Mode");
-    pk.pack("attributes");
-    pk.pack_map(3);
+      pk.pack_map(2);
+      pk.pack("PROT");
+        pk.pack_map(3);
+        pk.pack("name");
+        pk.pack("PROT");
+        pk.pack("description");
+        pk.pack("Protection LD");
+        pk.pack("logical_nodes");
+          pk.pack_map(3);
+          pk.pack("LLN0");
+            pk.pack_map(10);
+            pk.pack("name");
+            pk.pack("LLN0");
+            pk.pack("class");
+            pk.pack("LLN0");
+            pk.pack("description");
+            pk.pack("Logical Node Zero");
+            pk.pack("data_objects");
+              pk.pack_map(2);
+              pk.pack("Mod");
+                pk.pack_map(4);
+                pk.pack("name");
+                pk.pack("Mod");
+                pk.pack("cdc");
+                pk.pack("ENC");
+                pk.pack("description");
+                pk.pack("Mode");
+                pk.pack("attributes");
+                  pk.pack_map(3);
     pk.pack("stVal");
     pk.pack_map(6);
     pk.pack("name");

@@ -24,7 +24,7 @@ from .data_model import (
 	IED, AccessPoint, LogicalDevice, LogicalNode, DataObject, DataAttribute, 
 	DataType, FunctionalConstraint, DataSet, ReportControl, GSEControl, 
 	SampledValueControl, LogControl, SettingGroupControl,
-	CommunicationParams, GSEAddress, SMVAddress
+	MmsAddress, GSEAddress, SMVAddress
 )
 from loguru import logger
 
@@ -925,7 +925,7 @@ class SCDParser:
 				address_elem = self._find_element(conn_ap, 'Address')
 				if address_elem is not None:
 					comm_params = self._parse_address_params(address_elem)
-					access_point.communication_params = comm_params
+					access_point.mms_addresses = comm_params
 					logger.debug(f"Parsed communication params for {ied_name}/{ap_name}: IP={comm_params.ip_address}")
 				
 				# 解析 GSE 地址
@@ -952,7 +952,7 @@ class SCDParser:
 						access_point.smv_addresses[smv_key] = smv_address
 						logger.debug(f"Parsed SMV address for {ied_name}/{ap_name}/{smv_key}: MAC={smv_address.mac_address}")
 	
-	def _parse_address_params(self, address_elem: ET.Element) -> CommunicationParams:
+	def _parse_address_params(self, address_elem: ET.Element) -> MmsAddress:
 		"""
 		解析 Address 节点中的通信参数
 		
@@ -970,9 +970,9 @@ class SCDParser:
 			address_elem: Address XML 元素
 			
 		Returns:
-			CommunicationParams 对象
+			MmsAddress 对象
 		"""
-		params = CommunicationParams()
+		params = MmsAddress()
 		
 		for p_elem in self._findall_elements(address_elem, 'P'):
 			p_type = p_elem.get('type', '').upper()
@@ -989,6 +989,12 @@ class SCDParser:
 					params.osi_ae_qualifier = int(p_value)
 				except ValueError:
 					params.osi_ae_qualifier = 0
+			elif p_type == 'OSI-PSEL':
+				params.osi_psel = p_value
+			elif p_type == 'OSI-SSEL':
+				params.osi_ssel = p_value
+			elif p_type == 'OSI-TSEL':
+				params.osi_tsel = p_value
 		
 		return params
 	

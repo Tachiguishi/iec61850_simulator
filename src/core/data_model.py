@@ -670,8 +670,6 @@ class LogControl(IEC61850Element):
 		}
 
 
-
-
 @dataclass
 class LogicalDevice(IEC61850Element):
 	"""
@@ -709,51 +707,28 @@ class LogicalDevice(IEC61850Element):
 			"logical_nodes": {k: v.to_dict() for k, v in self.logical_nodes.items()},
 		}
 
-"""
-<Communication>
-  <SubNetwork name="StationBus" type="8-MMS">
-    <ConnectedAP iedName="IED1" apName="AP1">
-      <Address>
-        <P type="IP">192.168.1.100</P>
-        <P type="IP-SUBNET">255.255.255.0</P>
-        <P type="OSI-AP-Title">1,3,9999,33</P>
-        <P type="OSI-AE-Qualifier">33</P>
-      </Address>
-      <GSE ldInst="LD0" cbName="GoCB01">
-        <Address>
-          <P type="MAC-Address">01-0C-CD-01-00-01</P>
-          <P type="APPID">0001</P>
-          <P type="VLAN-PRIORITY">4</P>
-          <P type="VLAN-ID">000</P>
-        </Address>
-      </GSE>
-    </ConnectedAP>
-  </SubNetwork>
-</Communication>
-"""
 
 @dataclass
-class CommunicationParams:
+class MmsAddress:
 	"""
 	通信参数 - 存储 SCD Communication 节点中的网络配置
 	
 	Attributes:
 		ip_address: IP 地址 (从 ConnectedAP/Address/P 中解析)
+		ip_subnet: 子网掩码
 		osi_ap_title: OSI AP Title (应用进程标题)
 		osi_ae_qualifier: OSI AE Qualifier (应用实体限定符)
-		mac_address: MAC 地址 (GOOSE/SMV 使用)
-		appid: APPID (GOOSE/SMV 应用标识符)
-		vlan_priority: VLAN 优先级
-		vlan_id: VLAN ID
+		osi_psel: OSI PSEL (协议选择符)
+		osi_ssel: OSI SSEL (服务选择符)
+		osi_tsel: OSI TSEL (传输选择符)
 	"""
 	ip_address: str = ""
 	ip_subnet: str = ""
 	osi_ap_title: str = ""
 	osi_ae_qualifier: int = 0
-	mac_address: str = ""
-	appid: str = ""
-	vlan_priority: int = 4
-	vlan_id: int = 0
+	osi_psel: str = ""
+	osi_ssel: str = ""
+	osi_tsel: str = ""
 	
 	def to_dict(self) -> Dict[str, Any]:
 		"""转换为字典"""
@@ -762,24 +737,22 @@ class CommunicationParams:
 			"ip_subnet": self.ip_subnet,
 			"osi_ap_title": self.osi_ap_title,
 			"osi_ae_qualifier": self.osi_ae_qualifier,
-			"mac_address": self.mac_address,
-			"appid": self.appid,
-			"vlan_priority": self.vlan_priority,
-			"vlan_id": self.vlan_id,
+			"osi_psel": self.osi_psel,
+			"osi_ssel": self.osi_ssel,
+			"osi_tsel": self.osi_tsel,
 		}
 	
 	@classmethod
-	def from_dict(cls, data: Dict[str, Any]) -> 'CommunicationParams':
+	def from_dict(cls, data: Dict[str, Any]) -> 'MmsAddress':
 		"""从字典创建实例"""
 		return cls(
 			ip_address=data.get("ip_address", ""),
 			ip_subnet=data.get("ip_subnet", ""),
 			osi_ap_title=data.get("osi_ap_title", ""),
 			osi_ae_qualifier=data.get("osi_ae_qualifier", 0),
-			mac_address=data.get("mac_address", ""),
-			appid=data.get("appid", ""),
-			vlan_priority=data.get("vlan_priority", 4),
-			vlan_id=data.get("vlan_id", 0),
+			osi_psel=data.get("osi_psel", ""),
+			osi_ssel=data.get("osi_ssel", ""),
+			osi_tsel=data.get("osi_tsel", ""),
 		)
 
 
@@ -843,12 +816,12 @@ class AccessPoint(IEC61850Element):
 	Attributes:
 		name: 访问点名称
 		logical_devices: 逻辑设备字典
-		communication_params: 通信参数 (从 SCD Communication 节点解析)
+		mms_addresses: 通信参数 (从 SCD Communication 节点解析)
 		gse_addresses: GSE 地址映射 (cbName -> GSEAddress)
 		smv_addresses: SMV 地址映射 (cbName -> SMVAddress)
 	"""
 	logical_devices: Dict[str, LogicalDevice] = field(default_factory=dict)
-	communication_params: Optional[CommunicationParams] = None
+	mms_addresses: Optional[MmsAddress] = None
 	gse_addresses: Dict[str, GSEAddress] = field(default_factory=dict)
 	smv_addresses: Dict[str, SMVAddress] = field(default_factory=dict)
 	
@@ -869,8 +842,8 @@ class AccessPoint(IEC61850Element):
 			"description": self.description,
 			"logical_devices": {k: v.to_dict() for k, v in self.logical_devices.items()},
 		}
-		if self.communication_params:
-			result["communication_params"] = self.communication_params.to_dict()
+		if self.mms_addresses:
+			result["mms_addresses"] = self.mms_addresses.to_dict()
 		if self.gse_addresses:
 			result["gse_addresses"] = {k: v.to_dict() for k, v in self.gse_addresses.items()}
 		if self.smv_addresses:
@@ -1002,8 +975,8 @@ class IED(IEC61850Element):
 		# 添加通信参数 - 收集所有访问点的通信参数
 		comm_params = {}
 		for ap_name, ap in self.access_points.items():
-			if ap.communication_params:
-				comm_params[ap_name] = ap.communication_params.to_dict()
+			if ap.mms_addresses:
+				comm_params[ap_name] = ap.mms_addresses.to_dict()
 				# 添加 GSE 和 SMV 地址
 				if ap.gse_addresses:
 					comm_params[ap_name]["gse_addresses"] = {

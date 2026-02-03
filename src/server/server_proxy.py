@@ -47,7 +47,6 @@ class ServerConfig:
             enable_reporting=data.get("enable_reporting", True),
             enable_goose=data.get("enable_goose", False),
         )
-    
 
 
 class IEC61850ServerProxy:
