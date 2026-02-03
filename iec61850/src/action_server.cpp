@@ -353,68 +353,42 @@ bool handle_server_action(
         
         LOG4CPLUS_INFO(server_logger(), "server.start requested for instance " + instance_id);
 
-        auto config_obj = ipc::codec::find_key(payload, "config");
-        auto model_obj = ipc::codec::find_key(payload, "model");
-        if (!config_obj || !model_obj) {
-            LOG4CPLUS_ERROR(server_logger(), "server.start invalid payload");
+        auto* inst = context.get_server_instance(instance_id);
+        if (!inst || !inst->server || !inst->model) {
+            LOG4CPLUS_ERROR(server_logger(), "server.start: server not initialized, call server.load_model first");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
-            ipc::codec::pack_error(pk, "Invalid payload");
+            ipc::codec::pack_error(pk, "Server not initialized. Call server.load_model first");
             return true;
         }
 
-        int port = 102;
-        if (auto port_obj = ipc::codec::find_key(*config_obj, "port")) {
-            port = static_cast<int>(ipc::codec::as_int64(*port_obj, 102));
-        }
-        
-        int max_conn = 10;
-        if (auto max_conn_obj = ipc::codec::find_key(*config_obj, "max_connections")) {
-            max_conn = static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10));
-        }
-
-        // 解析 IP 地址 - 优先从 config 中获取，支持从 SCD Communication 节点解析的地址
-        std::string ip_address = "0.0.0.0";
-        if (auto ip_obj = ipc::codec::find_key(*config_obj, "ip_address")) {
-            ip_address = ipc::codec::as_string(*ip_obj, "0.0.0.0");
-        }
-        
-        LOG4CPLUS_INFO(server_logger(), "Server will bind to IP: " << ip_address << " port: " << port);
-
-        // 多实例模式
-        auto* inst = context.get_or_create_server_instance(instance_id);
-        
-        // 清理旧资源
-        if (inst->server) {
+        // 如果已经运行则停止
+        if (inst->running) {
             IedServer_stop(inst->server);
-            IedServer_destroy(inst->server);
-            inst->server = nullptr;
+            inst->running = false;
         }
-        if (inst->config) {
-            IedServerConfig_destroy(inst->config);
-            inst->config = nullptr;
-        }
-        if (inst->model) {
-            IedModel_destroy(inst->model);
-            inst->model = nullptr;
-        }
+
+        int port = inst->port;
+        std::string ip_address = inst->ip_address;
         
-        inst->model = build_model_from_dict(*model_obj, inst->ied_name);
-        inst->config = IedServerConfig_create();
-        IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
-        
-        inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
-        IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
-        
-        // 设置本地 IP 地址
-        if (ip_address != "0.0.0.0") {
-            IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
-            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " bound to IP: " << ip_address);
+        // 检查是否有新的port配置
+        auto config_obj = ipc::codec::find_key(payload, "config");
+        if (config_obj && config_obj->type == msgpack::type::MAP) {
+            if (auto port_obj = ipc::codec::find_key(*config_obj, "port")) {
+                port = static_cast<int>(ipc::codec::as_int64(*port_obj, inst->port));
+                inst->port = port;
+            }
+            if (auto ip_obj = ipc::codec::find_key(*config_obj, "ip_address")) {
+                ip_address = ipc::codec::as_string(*ip_obj, inst->ip_address);
+                if (ip_address != "0.0.0.0") {
+                    IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
+                    inst->ip_address = ip_address;
+                }
+            }
         }
         
-        inst->port = port;
-        inst->ip_address = ip_address;
+        LOG4CPLUS_INFO(server_logger(), "Starting server instance " << instance_id << " on " << ip_address << ":" << port);
         IedServer_start(inst->server, port);
         inst->running = true;
         
@@ -488,22 +462,84 @@ bool handle_server_action(
         
         LOG4CPLUS_INFO(server_logger(), "server.load_model requested for instance " + instance_id);
 
-        if (auto model_obj = ipc::codec::find_key(payload, "model")) {
-            auto* inst = context.get_or_create_server_instance(instance_id);
-            if (inst->model) {
-                IedModel_destroy(inst->model);
-            }
-            inst->model = build_model_from_dict(*model_obj, inst->ied_name);
-            pk.pack("payload");
-            ipc::codec::pack_success_payload(pk);
-            pk.pack("error");
-            pk.pack_nil();
-        } else {
+        auto model_obj = ipc::codec::find_key(payload, "model");
+        auto config_obj = ipc::codec::find_key(payload, "config");
+        
+        if (!model_obj) {
+            LOG4CPLUS_ERROR(server_logger(), "server.load_model: model is required");
             pk.pack("payload");
             pk.pack_map(0);
             pk.pack("error");
-            ipc::codec::pack_error(pk, "Invalid model payload");
+            ipc::codec::pack_error(pk, "model payload is required");
+            return true;
         }
+
+        // 获取或创建实例
+        auto* inst = context.get_or_create_server_instance(instance_id);
+        
+        // 清理旧资源
+        if (inst->server) {
+            IedServer_stop(inst->server);
+            IedServer_destroy(inst->server);
+            inst->server = nullptr;
+        }
+        if (inst->config) {
+            IedServerConfig_destroy(inst->config);
+            inst->config = nullptr;
+        }
+        if (inst->model) {
+            IedModel_destroy(inst->model);
+            inst->model = nullptr;
+        }
+        
+        // 构建model
+        inst->model = build_model_from_dict(*model_obj, inst->ied_name);
+        
+        // 创建配置
+        inst->config = IedServerConfig_create();
+        
+        // 从config中读取参数
+        int max_conn = 10;
+        int port = 102;
+        std::string ip_address = "0.0.0.0";
+        
+        if (config_obj && config_obj->type == msgpack::type::MAP) {
+            if (auto max_conn_obj = ipc::codec::find_key(*config_obj, "max_connections")) {
+                max_conn = static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10));
+            }
+            if (auto port_obj = ipc::codec::find_key(*config_obj, "port")) {
+                port = static_cast<int>(ipc::codec::as_int64(*port_obj, 102));
+            }
+            if (auto ip_obj = ipc::codec::find_key(*config_obj, "ip_address")) {
+                ip_address = ipc::codec::as_string(*ip_obj, "0.0.0.0");
+            }
+        }
+        
+        IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
+        
+        // 创建IedServer
+        inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
+        IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
+        
+        // 设置本地 IP 地址
+        if (ip_address != "0.0.0.0") {
+            IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
+            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " configured IP: " << ip_address);
+        }
+        
+        inst->port = port;
+        inst->ip_address = ip_address;
+        
+        LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " loaded model (" << inst->ied_name << "), ready to start on " << ip_address << ":" << port);
+        
+        pk.pack("payload");
+        pk.pack_map(2);
+        pk.pack("success");
+        pk.pack(true);
+        pk.pack("instance_id");
+        pk.pack(instance_id);
+        pk.pack("error");
+        pk.pack_nil();
         return true;
     }
 
