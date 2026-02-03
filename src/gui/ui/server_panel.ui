@@ -149,50 +149,6 @@
             </property>
            </widget>
           </item>
-          <item row="6" column="0">
-           <widget class="QLabel" name="interfaceLabel">
-            <property name="text">
-             <string>网络接口:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="6" column="1">
-           <widget class="QComboBox" name="interfaceCombo">
-            <property name="toolTip">
-             <string>选择网络接口用于IP配置</string>
-            </property>
-           </widget>
-          </item>
-          <item row="7" column="0">
-           <widget class="QLabel" name="prefixLenLabel">
-            <property name="text">
-             <string>子网掩码位数:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="7" column="1">
-           <widget class="QSpinBox" name="prefixLenInput">
-            <property name="toolTip">
-             <string>IP地址的前缀长度（CIDR格式）</string>
-            </property>
-            <property name="minimum">
-             <number>1</number>
-            </property>
-            <property name="maximum">
-             <number>32</number>
-            </property>
-            <property name="value">
-             <number>24</number>
-            </property>
-           </widget>
-          </item>
-          <item row="8" column="0" colspan="2">
-           <widget class="QPushButton" name="setInterfaceBtn">
-            <property name="text">
-             <string>设置网络接口</string>
-            </property>
-           </widget>
-          </item>
          </layout>
         </widget>
        </item>

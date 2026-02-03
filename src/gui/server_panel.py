@@ -96,9 +96,6 @@ class ServerPanel(QWidget):
         self.loadModelBtn.clicked.connect(self._load_data_model)
         self.reloadModelBtn.clicked.connect(self._create_default_model)
         
-        # 网络接口
-        self.setInterfaceBtn.clicked.connect(self._set_network_interface)
-        
         # 仿真脚本
         self.runScriptBtn.clicked.connect(self._run_simulation_script)
         self.stopScriptBtn.clicked.connect(self._stop_simulation_script)
@@ -143,9 +140,6 @@ class ServerPanel(QWidget):
         self.randomValuesCheck.setChecked(config.enable_random_values)
         self.reportingCheck.setChecked(config.enable_reporting)
         
-        # 加载网络接口列表
-        self._load_network_interfaces()
-    
     def _setup_timers(self):
         """设置定时器"""
         # 数据刷新定时器
@@ -207,78 +201,6 @@ class ServerPanel(QWidget):
         self.ipInput.setDisabled(disabled)
         self.portInput.setDisabled(disabled)
         self.maxConnInput.setDisabled(disabled)
-    
-    # ========================================================================
-    # 网络接口管理
-    # ========================================================================
-    
-    def _load_network_interfaces(self):
-        """加载网络接口列表"""
-        if not self.server:
-            return
-        
-        interfaces, current = self.server.get_network_interfaces()
-        
-        self.interfaceCombo.clear()
-        self.interfaceCombo.addItem("(未选择)", None)
-        
-        for iface in interfaces:
-            name = iface.get("name", "")
-            is_up = iface.get("is_up", False)
-            addresses = iface.get("addresses", [])
-            
-            # 显示网卡名称、状态和IP地址
-            status = "UP" if is_up else "DOWN"
-            addr_str = ", ".join(addresses[:2]) if addresses else "无IP"
-            display_text = f"{name} [{status}] - {addr_str}"
-            
-            self.interfaceCombo.addItem(display_text, name)
-        
-        # 设置当前选择
-        if current:
-            current_name = current.get("name", "")
-            prefix_len = current.get("prefix_len", 24)
-            
-            # 在下拉框中选中当前接口
-            for i in range(self.interfaceCombo.count()):
-                if self.interfaceCombo.itemData(i) == current_name:
-                    self.interfaceCombo.setCurrentIndex(i)
-                    break
-            
-            self.prefixLenInput.setValue(prefix_len)
-            self.log_message.emit("info", f"当前网络接口: {current_name} (prefix_len: {prefix_len})")
-        else:
-            self.log_message.emit("info", "未配置网络接口")
-    
-    def _set_network_interface(self):
-        """设置网络接口"""
-        if not self.server:
-            return
-        
-        selected_index = self.interfaceCombo.currentIndex()
-        if selected_index <= 0:  # 第一项是"(未选择)"
-            QMessageBox.warning(self, "警告", "请选择一个网络接口")
-            return
-        
-        interface_name = self.interfaceCombo.itemData(selected_index)
-        prefix_len = self.prefixLenInput.value()
-        
-        if not interface_name:
-            return
-        
-        # 调用后端设置接口
-        if self.server.set_network_interface(interface_name, prefix_len):
-            QMessageBox.information(
-                self, 
-                "成功", 
-                f"已设置网络接口: {interface_name}\n子网掩码位数: {prefix_len}\n\n"
-                "此配置对所有服务器实例生效。\n"
-                "当服务器使用非 0.0.0.0 或 127.* 的IP地址时，\n"
-                "系统会自动在此接口上配置相应的IP地址。"
-            )
-            self.log_message.emit("info", f"网络接口已设置: {interface_name} (/{prefix_len})")
-        else:
-            QMessageBox.critical(self, "错误", "设置网络接口失败")
     
     # ========================================================================
     # 数据模型管理

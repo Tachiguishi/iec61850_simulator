@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal
-from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtGui import QCloseEvent, QActionGroup
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QButtonGroup,
-    QMessageBox, QLabel, QFileDialog
+    QMainWindow, QWidget, QVBoxLayout,
+    QMessageBox, QLabel, QFileDialog, QDialog, QComboBox,
+    QSpinBox, QDialogButtonBox, QFormLayout
 )
 from PyQt6 import uic
 
@@ -32,33 +33,10 @@ from gui.multi_server_panel import MultiServerPanel
 from gui.multi_client_panel import MultiClientPanel
 from gui.log_widget import LogWidget
 from backend.core_process import CoreProcessManager
+from server.server_proxy import IEC61850ServerProxy, ServerConfig
 
 # UI文件路径
 UI_DIR = Path(__file__).parent / "ui"
-
-
-# 模式按钮样式
-MODE_BUTTON_STYLE = """
-    QPushButton {
-        background-color: #f0f0f0;
-        border: 2px solid #c0c0c0;
-        border-radius: 8px;
-        padding: 10px 20px;
-        color: #333;
-    }
-    QPushButton:hover {
-        background-color: #e0e0e0;
-        border-color: #a0a0a0;
-    }
-    QPushButton:checked {
-        background-color: #0078d4;
-        border-color: #0066b8;
-        color: white;
-    }
-    QPushButton:checked:hover {
-        background-color: #006cc1;
-    }
-"""
 
 
 class MainWindow(QMainWindow):
@@ -84,6 +62,8 @@ class MainWindow(QMainWindow):
         # 加载UI文件
         uic.loadUi(UI_DIR / "main_window.ui", self)
         
+        self._network_proxy = None
+
         self._init_ui()
         self._init_panels()
         self._connect_signals()
@@ -115,14 +95,12 @@ class MainWindow(QMainWindow):
         gui_config = self.config.get("gui", {}).get("window", {})
         self.resize(gui_config.get("width", 1400), gui_config.get("height", 900))
         
-        # 设置模式按钮样式
-        self.serverModeBtn.setStyleSheet(MODE_BUTTON_STYLE)
-        self.clientModeBtn.setStyleSheet(MODE_BUTTON_STYLE)
-        
-        # 按钮组（互斥选择）
-        self.mode_group = QButtonGroup(self)
-        self.mode_group.addButton(self.serverModeBtn, 0)
-        self.mode_group.addButton(self.clientModeBtn, 1)
+        # 模式菜单组（互斥选择）
+        self.mode_action_group = QActionGroup(self)
+        self.mode_action_group.setExclusive(True)
+        self.mode_action_group.addAction(self.actionModeServer)
+        self.mode_action_group.addAction(self.actionModeClient)
+        self.actionModeServer.setChecked(True)
         
         # 设置分割器大小
         self.mainSplitter.setSizes([600, 200])
@@ -168,7 +146,8 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         """连接信号"""
         # 模式切换
-        self.mode_group.buttonClicked.connect(self._on_mode_changed)
+        self.actionModeServer.triggered.connect(lambda: self._switch_mode("server"))
+        self.actionModeClient.triggered.connect(lambda: self._switch_mode("client"))
         
         # 菜单操作
         self.actionLoadConfig.triggered.connect(self._on_load_config)
@@ -177,6 +156,7 @@ class MainWindow(QMainWindow):
         self.actionShowLog.triggered.connect(self._toggle_log_panel)
         self.actionClearLog.triggered.connect(self.log_widget.clear)
         self.actionAbout.triggered.connect(self._show_about)
+        self.actionNetworkInterface.triggered.connect(self._open_network_interface_dialog)
         
         # 工具栏操作
         self.actionStart.triggered.connect(self._on_start)
@@ -234,25 +214,112 @@ class MainWindow(QMainWindow):
     # 事件处理
     # ========================================================================
     
-    def _on_mode_changed(self, button):
+    def _switch_mode(self, mode: str):
         """模式切换"""
-        if button == self.serverModeBtn:
+        if mode == "server":
             self.current_mode = "server"
             self.panelStack.setCurrentIndex(0)
             self.mode_status_label.setText("模式: 服务端")
             self.actionStart.setText("▶ 启动服务")
             self.actionStop.setText("⏹ 停止服务")
-            self.modeDescLabel.setText("仿真IED设备，提供MMS服务端功能")
+            self.actionModeServer.setChecked(True)
         else:
             self.current_mode = "client"
             self.panelStack.setCurrentIndex(1)
             self.mode_status_label.setText("模式: 客户端")
             self.actionStart.setText("▶ 连接")
             self.actionStop.setText("⏹ 断开")
-            self.modeDescLabel.setText("连接到IED设备，进行数据读写和控制")
+            self.actionModeClient.setChecked(True)
         
         self.mode_changed.emit(self.current_mode)
         logger.info(f"Switched to {self.current_mode} mode")
+
+    def _get_network_proxy(self):
+        """获取用于网络接口配置的代理"""
+        if self._network_proxy:
+            return self._network_proxy
+
+        proxy = None
+        if hasattr(self.server_panel, "server") and self.server_panel.server:
+            proxy = self.server_panel.server
+        elif hasattr(self.server_panel, "instance_manager"):
+            for instance in self.server_panel.instance_manager.get_all_instances():
+                proxy = instance.proxy
+                break
+
+        if not proxy:
+            ipc_config = self.config.get("ipc", {})
+            socket_path = ipc_config.get("socket_path", "/tmp/iec61850_simulator.sock")
+            timeout_ms = ipc_config.get("request_timeout_ms", 3000)
+            proxy = IEC61850ServerProxy(ServerConfig(), socket_path, timeout_ms)
+
+        self._network_proxy = proxy
+        return proxy
+
+    def _open_network_interface_dialog(self):
+        """打开网卡选择对话框"""
+        proxy = self._get_network_proxy()
+        if not proxy:
+            QMessageBox.warning(self, "提示", "无法连接后端服务")
+            return
+
+        interfaces, current = proxy.get_network_interfaces()
+        if not interfaces:
+            QMessageBox.warning(self, "提示", "未获取到可用网卡")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("网卡选择")
+        dialog.setMinimumWidth(420)
+
+        layout = QFormLayout(dialog)
+        combo = QComboBox(dialog)
+        combo.addItem("(未选择)", None)
+
+        for iface in interfaces:
+            name = iface.get("name", "")
+            is_up = iface.get("is_up", False)
+            addresses = iface.get("addresses", [])
+            status = "UP" if is_up else "DOWN"
+            addr_str = ", ".join(addresses[:2]) if addresses else "无IP"
+            display_text = f"{name} [{status}] - {addr_str}"
+            combo.addItem(display_text, name)
+
+        prefix_spin = QSpinBox(dialog)
+        prefix_spin.setRange(1, 32)
+        prefix_spin.setValue(24)
+
+        if current:
+            current_name = current.get("name", "")
+            prefix_len = current.get("prefix_len", 24)
+            for i in range(combo.count()):
+                if combo.itemData(i) == current_name:
+                    combo.setCurrentIndex(i)
+                    break
+            prefix_spin.setValue(prefix_len)
+
+        layout.addRow("网络接口:", combo)
+        layout.addRow("前缀长度:", prefix_spin)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            interface_name = combo.currentData()
+            if not interface_name:
+                QMessageBox.warning(self, "提示", "请选择一个网络接口")
+                return
+            prefix_len = prefix_spin.value()
+            if proxy.set_network_interface(interface_name, prefix_len):
+                QMessageBox.information(
+                    self,
+                    "设置成功",
+                    f"已设置网络接口: {interface_name}\n前缀长度: {prefix_len}\n\n此配置对所有服务器实例生效。"
+                )
+            else:
+                QMessageBox.critical(self, "错误", "设置网络接口失败")
     
     def _on_start(self):
         """启动/连接"""
