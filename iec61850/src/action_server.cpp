@@ -421,23 +421,59 @@ bool handle_server_action(
         LOG4CPLUS_INFO(server_logger(), "server.stop requested for instance " + instance_id);
 
         auto* inst = context.get_server_instance(instance_id);
+        if (inst && inst->server && inst->running) {
+            IedServer_stop(inst->server);
+            inst->running = false;
+            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " stopped");
+        }
+
+        pk.pack("payload");
+        ipc::codec::pack_success_payload(pk);
+        pk.pack("error");
+        pk.pack_nil();
+        return true;
+    }
+
+    if (action == "server.remove") {
+        std::lock_guard<std::mutex> lock(context.mutex);
+        
+        // 检查instance_id是否提供
+        if (instance_id.empty()) {
+            LOG4CPLUS_ERROR(server_logger(), "server.remove: instance_id is required");
+            pk.pack("payload");
+            pk.pack_map(0);
+            pk.pack("error");
+            ipc::codec::pack_error(pk, "instance_id is required");
+            return true;
+        }
+        
+        LOG4CPLUS_INFO(server_logger(), "server.remove requested for instance " + instance_id);
+
+        auto* inst = context.get_server_instance(instance_id);
         if (inst) {
+            // 先停止服务
             if (inst->server) {
-                IedServer_stop(inst->server);
+                if (inst->running) {
+                    IedServer_stop(inst->server);
+                    inst->running = false;
+                }
                 IedServer_destroy(inst->server);
                 inst->server = nullptr;
             }
+            // 释放配置
             if (inst->config) {
                 IedServerConfig_destroy(inst->config);
                 inst->config = nullptr;
             }
+            // 释放模型
             if (inst->model) {
                 IedModel_destroy(inst->model);
                 inst->model = nullptr;
             }
             inst->clients.clear();
-            inst->running = false;
+            // 从上下文中删除实例
             context.remove_server_instance(instance_id);
+            LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " removed");
         }
 
         pk.pack("payload");
