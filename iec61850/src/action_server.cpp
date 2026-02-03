@@ -2,6 +2,7 @@
 
 #include "logger.hpp"
 #include "msgpack_codec.hpp"
+#include "network_config.hpp"
 
 #include <iec61850_dynamic_model.h>
 
@@ -388,6 +389,17 @@ bool handle_server_action(
             }
         }
         
+        // 如果IP需要配置且指定了全局网卡，则配置IP地址
+        if (network::should_configure_ip(ip_address) && !context.global_interface_name.empty()) {
+            std::string label = context.global_interface_name + ":iec" + instance_id;
+            if (network::add_ip_address(context.global_interface_name, ip_address, context.global_prefix_len, label)) {
+                inst->ip_configured = true;
+                LOG4CPLUS_INFO(server_logger(), "Configured IP " << ip_address << " on " << context.global_interface_name);
+            } else {
+                LOG4CPLUS_WARN(server_logger(), "Failed to configure IP " << ip_address << " on " << context.global_interface_name);
+            }
+        }
+        
         LOG4CPLUS_INFO(server_logger(), "Starting server instance " << instance_id << " on " << ip_address << ":" << port);
         IedServer_start(inst->server, port);
         inst->running = true;
@@ -451,7 +463,14 @@ bool handle_server_action(
 
         auto* inst = context.get_server_instance(instance_id);
         if (inst) {
-            // 先停止服务
+            // 先清理IP配置
+            if (inst->ip_configured && !context.global_interface_name.empty()) {
+                network::remove_ip_address(context.global_interface_name, inst->ip_address, context.global_prefix_len);
+                inst->ip_configured = false;
+                LOG4CPLUS_INFO(server_logger(), "Cleaned up IP " << inst->ip_address << " from " << context.global_interface_name);
+            }
+            
+            // 停止服务
             if (inst->server) {
                 if (inst->running) {
                     IedServer_stop(inst->server);
@@ -732,6 +751,86 @@ bool handle_server_action(
             pk.pack(inst->ied_name);
         }
         
+        pk.pack("error");
+        pk.pack_nil();
+        return true;
+    }
+    
+    if (action == "server.get_interfaces") {
+        std::lock_guard<std::mutex> lock(context.mutex);
+        LOG4CPLUS_DEBUG(server_logger(), "server.get_interfaces requested");
+        
+        auto interfaces = network::get_network_interfaces();
+        
+        pk.pack("payload");
+        pk.pack_map(2);
+        pk.pack("interfaces");
+        pk.pack_array(interfaces.size());
+        
+        for (const auto& iface : interfaces) {
+            pk.pack_map(4);
+            pk.pack("name");
+            pk.pack(iface.name);
+            pk.pack("description");
+            pk.pack(iface.description);
+            pk.pack("is_up");
+            pk.pack(iface.is_up);
+            pk.pack("addresses");
+            pk.pack_array(iface.addresses.size());
+            for (const auto& addr : iface.addresses) {
+                pk.pack(addr);
+            }
+        }
+        
+        // 返回当前配置的网卡
+        pk.pack("current_interface");
+        if (context.global_interface_name.empty()) {
+            pk.pack_nil();
+        } else {
+            pk.pack_map(2);
+            pk.pack("name");
+            pk.pack(context.global_interface_name);
+            pk.pack("prefix_len");
+            pk.pack(context.global_prefix_len);
+        }
+        
+        pk.pack("error");
+        pk.pack_nil();
+        return true;
+    }
+    
+    if (action == "server.set_interface") {
+        std::lock_guard<std::mutex> lock(context.mutex);
+        LOG4CPLUS_INFO(server_logger(), "server.set_interface requested");
+        
+        auto iface_obj = ipc::codec::find_key(payload, "interface_name");
+        if (!iface_obj) {
+            LOG4CPLUS_ERROR(server_logger(), "server.set_interface: interface_name is required");
+            pk.pack("payload");
+            pk.pack_map(0);
+            pk.pack("error");
+            ipc::codec::pack_error(pk, "interface_name is required");
+            return true;
+        }
+        
+        std::string interface_name = ipc::codec::as_string(*iface_obj, "");
+        int prefix_len = 24;
+        
+        if (auto prefix_obj = ipc::codec::find_key(payload, "prefix_len")) {
+            prefix_len = static_cast<int>(ipc::codec::as_int64(*prefix_obj, 24));
+        }
+        
+        context.global_interface_name = interface_name;
+        context.global_prefix_len = prefix_len;
+        
+        LOG4CPLUS_INFO(server_logger(), "Global interface set to: " << interface_name << " (prefix_len: " << prefix_len << ")");
+        
+        pk.pack("payload");
+        pk.pack_map(2);
+        pk.pack("interface_name");
+        pk.pack(interface_name);
+        pk.pack("prefix_len");
+        pk.pack(prefix_len);
         pk.pack("error");
         pk.pack_nil();
         return true;

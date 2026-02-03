@@ -44,6 +44,10 @@ set(LOG4CPLUS_BUILD_LOGGINGSERVER OFF CACHE BOOL "log4cplus logging server" FORC
 
 FetchContent_MakeAvailable(libiec61850 msgpack log4cplus)
 
+# Find libnl
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBNL REQUIRED libnl-3.0 libnl-route-3.0)
+
 if(DEBUG_BUILD)
 	set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()

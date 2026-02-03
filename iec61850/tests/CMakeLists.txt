@@ -21,6 +21,8 @@ add_executable(action_server_tests
   ../src/action_server.cpp
   ../src/msgpack_codec.cpp
   ../src/logger.cpp
+  ../src/core_context.cpp
+  ../src/network_config.cpp
 )
 
 add_compile_definitions(
@@ -39,12 +41,14 @@ target_include_directories(action_server_tests PRIVATE
   ${libiec61850_SOURCE_DIR}/src/logging
   ${libiec61850_SOURCE_DIR}/hal/inc
   ${msgpack_SOURCE_DIR}/include
+  ${LIBNL_INCLUDE_DIRS}
 )
 
 target_link_libraries(action_server_tests PRIVATE
   iec61850
   GTest::gtest
   GTest::gtest_main
+  ${LIBNL_LIBRARIES}
 )
 
 if(ENABLE_COVERAGE)

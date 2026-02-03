@@ -22,6 +22,7 @@ struct ServerInstanceContext {
     std::string instance_id;
     std::string ied_name;
     std::string ip_address = "0.0.0.0";  // 监听的 IP 地址
+    bool ip_configured = false;          // 是否配置了IP地址
     
     IedModel* model = nullptr;
     IedServer server = nullptr;
@@ -31,18 +32,7 @@ struct ServerInstanceContext {
     int port = 102;
     bool running = false;
     
-    ~ServerInstanceContext() {
-        if (server) {
-            IedServer_stop(server);
-            IedServer_destroy(server);
-        }
-        if (config) {
-            IedServerConfig_destroy(config);
-        }
-        if (model) {
-            IedModel_destroy(model);
-        }
-    }
+    ~ServerInstanceContext();
 };
 
 /**
@@ -72,6 +62,10 @@ struct ClientInstanceContext {
  */
 struct BackendContext {
     std::mutex mutex;
+
+    // 全局网络配置（整个程序共享）
+    std::string global_interface_name;   // 选中的网卡名称
+    int global_prefix_len = 24;          // IP前缀长度
 
     // 多实例支持：使用instance_id作为key
     std::unordered_map<std::string, std::unique_ptr<ServerInstanceContext>> server_instances;

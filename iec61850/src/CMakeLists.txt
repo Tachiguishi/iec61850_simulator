@@ -8,8 +8,9 @@ target_include_directories(iec61850_core PRIVATE
 	${libiec61850_SOURCE_DIR}/src/logging
 	${libiec61850_SOURCE_DIR}/hal/inc
 	${msgpack_SOURCE_DIR}/include
+	${LIBNL_INCLUDE_DIRS}
 )
-target_link_libraries(iec61850_core PRIVATE iec61850)
+target_link_libraries(iec61850_core PRIVATE iec61850 ${LIBNL_LIBRARIES})
 
 if(TARGET msgpackc-cxx)
 	target_link_libraries(iec61850_core PRIVATE msgpackc-cxx)
