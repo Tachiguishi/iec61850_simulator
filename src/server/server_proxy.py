@@ -193,6 +193,46 @@ class IEC61850ServerProxy:
         except IPCError as exc:
             self._log("error", f"Get clients failed: {exc}")
             return []
+    
+    def get_network_interfaces(self) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """
+        获取网络接口列表及当前配置
+        
+        Returns:
+            (interfaces, current_interface): 接口列表和当前配置的接口
+        """
+        try:
+            response = self._ipc.request("server.get_interfaces", {})
+            interfaces = response.data.get("interfaces", [])
+            current_interface = response.data.get("current_interface")
+            return interfaces, current_interface
+        except IPCError as exc:
+            self._log("error", f"Get interfaces failed: {exc}")
+            return [], None
+    
+    def set_network_interface(self, interface_name: str, prefix_len: int = 24) -> bool:
+        """
+        设置全局网络接口配置
+        
+        Args:
+            interface_name: 网卡名称
+            prefix_len: IP前缀长度，默认24
+            
+        Returns:
+            是否设置成功
+        """
+        try:
+            response = self._ipc.request("server.set_interface", {
+                "interface_name": interface_name,
+                "prefix_len": prefix_len
+            })
+            if response.data.get("interface_name") == interface_name:
+                self._log("info", f"Network interface set to: {interface_name} (prefix_len: {prefix_len})")
+                return True
+            return False
+        except IPCError as exc:
+            self._log("error", f"Set interface failed: {exc}")
+            return False
 
     # =====================================================================
     # Internal helpers

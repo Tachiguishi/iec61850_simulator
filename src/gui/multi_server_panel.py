@@ -15,7 +15,8 @@ from datetime import datetime
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QStackedWidget, QLabel, QMessageBox, QFileDialog
+    QStackedWidget, QLabel, QMessageBox, QFileDialog,
+    QPushButton, QComboBox, QSpinBox, QGroupBox, QGridLayout
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -68,11 +69,35 @@ class MultiServerPanel(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # 左侧：实例列表
+        # 左侧：实例列表和全局网络配置
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(4, 4, 4, 4)
         
+        # 全局网络接口配置
+        self.network_group = QGroupBox("全局网络接口")
+        network_layout = QGridLayout()
+        
+        network_layout.addWidget(QLabel("网络接口:"), 0, 0)
+        self.interface_combo = QComboBox()
+        self.interface_combo.setToolTip("选择网络接口用于IP配置（对所有实例生效）")
+        network_layout.addWidget(self.interface_combo, 0, 1)
+        
+        network_layout.addWidget(QLabel("前缀长度:"), 1, 0)
+        self.prefix_len_input = QSpinBox()
+        self.prefix_len_input.setRange(1, 32)
+        self.prefix_len_input.setValue(24)
+        self.prefix_len_input.setToolTip("IP地址的前缀长度（CIDR格式）")
+        network_layout.addWidget(self.prefix_len_input, 1, 1)
+        
+        self.set_interface_btn = QPushButton("应用配置")
+        self.set_interface_btn.clicked.connect(self._set_network_interface)
+        network_layout.addWidget(self.set_interface_btn, 2, 0, 1, 2)
+        
+        self.network_group.setLayout(network_layout)
+        left_layout.addWidget(self.network_group)
+        
+        # 实例列表
         self.instance_list = InstanceListWidget("server")
         left_layout.addWidget(self.instance_list)
         
@@ -83,6 +108,9 @@ class MultiServerPanel(QWidget):
         
         left_panel.setMinimumWidth(250)
         left_panel.setMaximumWidth(350)
+        
+        # 加载网络接口列表
+        self._load_network_interfaces()
         
         # 右侧：实例详情（使用StackedWidget切换不同实例的配置界面）
         self.detail_stack = QStackedWidget()
@@ -215,6 +243,101 @@ class MultiServerPanel(QWidget):
         instance = self.instance_manager.get_instance(instance_id)
         name = instance.name if instance else instance_id
         self.log_message.emit(level, f"[{name}] {message}")
+    
+    # =========================================================================
+    # 网络接口管理
+    # =========================================================================
+    
+    def _load_network_interfaces(self):
+        """加载网络接口列表"""
+        # 需要从实例管理器获取一个代理来调用后端
+        # 使用第一个实例的proxy，如果没有则创建临时的
+        proxy = None
+        for instance in self.instance_manager.get_all_instances():
+            proxy = instance.proxy
+            break
+        
+        if not proxy:
+            # 创建临时proxy用于查询
+            from server.server_proxy import IEC61850ServerProxy, ServerConfig
+            ipc_config = self.config.get("ipc", {})
+            socket_path = ipc_config.get("socket_path", "/tmp/iec61850_simulator.sock")
+            timeout_ms = ipc_config.get("request_timeout_ms", 3000)
+            proxy = IEC61850ServerProxy(ServerConfig(), socket_path, timeout_ms)
+        
+        interfaces, current = proxy.get_network_interfaces()
+        
+        self.interface_combo.clear()
+        self.interface_combo.addItem("(未选择)", None)
+        
+        for iface in interfaces:
+            name = iface.get("name", "")
+            is_up = iface.get("is_up", False)
+            addresses = iface.get("addresses", [])
+            
+            # 显示网卡名称、状态和IP地址
+            status = "UP" if is_up else "DOWN"
+            addr_str = ", ".join(addresses[:2]) if addresses else "无IP"
+            display_text = f"{name} [{status}] - {addr_str}"
+            
+            self.interface_combo.addItem(display_text, name)
+        
+        # 设置当前选择
+        if current:
+            current_name = current.get("name", "")
+            prefix_len = current.get("prefix_len", 24)
+            
+            # 在下拉框中选中当前接口
+            for i in range(self.interface_combo.count()):
+                if self.interface_combo.itemData(i) == current_name:
+                    self.interface_combo.setCurrentIndex(i)
+                    break
+            
+            self.prefix_len_input.setValue(prefix_len)
+            self.log_message.emit("info", f"当前全局网络接口: {current_name} (prefix_len: {prefix_len})")
+        else:
+            self.log_message.emit("info", "未配置全局网络接口")
+    
+    def _set_network_interface(self):
+        """设置网络接口"""
+        selected_index = self.interface_combo.currentIndex()
+        if selected_index <= 0:  # 第一项是"(未选择)"
+            QMessageBox.warning(self, "警告", "请选择一个网络接口")
+            return
+        
+        interface_name = self.interface_combo.itemData(selected_index)
+        prefix_len = self.prefix_len_input.value()
+        
+        if not interface_name:
+            return
+        
+        # 使用任意一个实例的proxy调用后端
+        proxy = None
+        for instance in self.instance_manager.instances.values():
+            proxy = instance.proxy
+            break
+        
+        if not proxy:
+            # 创建临时proxy
+            from server.server_proxy import IEC61850ServerProxy, ServerConfig
+            ipc_config = self.config.get("ipc", {})
+            socket_path = ipc_config.get("socket_path", "/tmp/iec61850_simulator.sock")
+            timeout_ms = ipc_config.get("request_timeout_ms", 3000)
+            proxy = IEC61850ServerProxy(ServerConfig(), socket_path, timeout_ms)
+        
+        # 调用后端设置接口
+        if proxy.set_network_interface(interface_name, prefix_len):
+            QMessageBox.information(
+                self, 
+                "成功", 
+                f"已设置全局网络接口: {interface_name}\n子网掩码位数: {prefix_len}\n\n"
+                "此配置对所有服务器实例生效。\n"
+                "当服务器使用非 0.0.0.0 或 127.* 的IP地址时，\n"
+                "系统会自动在此接口上配置相应的IP地址。"
+            )
+            self.log_message.emit("info", f"全局网络接口已设置: {interface_name} (/{prefix_len})")
+        else:
+            QMessageBox.critical(self, "错误", "设置网络接口失败")
     
     # =========================================================================
     # 面板管理
