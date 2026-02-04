@@ -54,10 +54,23 @@ class IEC61850ServerProxy:
     Server proxy for GUI. Keeps a local IED model for UI display,
     while delegating IEC61850 networking to C++ backend via IPC.
     
-    支持多实例：每个proxy可以有独立的instance_id，用于区分不同的服务器实例。
+    单例模式：确保全局只有一个服务器代理实例，避免重复连接。
     """
 
-    def __init__(self, config: Optional[ServerConfig], socket_path: str, timeout_ms: int = 3000):
+    _instance: Optional['IEC61850ServerProxy'] = None
+    _initialized: bool = False
+
+    def __new__(cls, config: Optional[ServerConfig] = None, socket_path: str = "", timeout_ms: int = 3000):
+        """单例模式：确保只创建一个实例"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, config: Optional[ServerConfig] = None, socket_path: str = "", timeout_ms: int = 3000):
+        # 避免重复初始化
+        if self._initialized:
+            return
+        
         self.config = config or ServerConfig()
         self.state = ServerState.STOPPED
         self.instance_id: Optional[str] = None  # 实例ID，用于多实例支持
@@ -66,12 +79,14 @@ class IEC61850ServerProxy:
         self.ied: Optional[IED] = None
 
         # 将毫秒转换为秒传递给 UDSMessageClient
-        self._ipc = UDSMessageClient(socket_path, timeout_ms / 1000.0)
+        self._ipc = UDSMessageClient(socket_path or "/tmp/iec61850_simulator.sock", timeout_ms / 1000.0)
 
         self._state_callbacks: List[Callable[[ServerState], None]] = []
         self._connection_callbacks: List[Callable[[str, bool], None]] = []
         self._data_callbacks: List[Callable[[str, Any, Any], None]] = []
         self._log_callbacks: List[Callable[[str, str], None]] = []
+        
+        self._initialized = True
 
     # =====================================================================
     # Callback registration
