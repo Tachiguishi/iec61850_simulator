@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
             return;
         }
 
-        LOG4CPLUS_DEBUG(core_logger(), "IPC action: " << request.action << " id=" << request.id);
+        LOG4CPLUS_INFO(core_logger(), "IPC action: " << request.action << " id=" << request.id);
 
         pk.pack_map(4);
         pk.pack("id");

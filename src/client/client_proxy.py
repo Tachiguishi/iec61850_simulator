@@ -66,7 +66,8 @@ class IEC61850ClientProxy:
         self.state = ClientState.DISCONNECTED
         self.instance_id: Optional[str] = None  # 实例ID，用于多实例支持
 
-        self._ipc = UDSMessageClient(socket_path, timeout_ms)
+        # 将毫秒转换为秒传递给 UDSMessageClient
+        self._ipc = UDSMessageClient(socket_path, timeout_ms / 1000.0)
 
         self._state_callbacks: List[Callable[[ClientState], None]] = []
         self._data_callbacks: List[Callable[[str, Any], None]] = []

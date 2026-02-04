@@ -6,5 +6,5 @@ pushd "iec61850"
 mkdir -p build && cd build
 cmake -DFETCHCONTENT_UPDATES_DISCONNECTED=ON \
 	  -DDEBUG_BUILD=ON \
-	 .. && make -j$(nproc) coverage
+	 .. && make -j$(nproc) && make -j$(nproc) coverage
 popd

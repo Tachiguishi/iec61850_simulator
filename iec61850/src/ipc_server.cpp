@@ -21,6 +21,25 @@ void cleanup_socket_file() {
 }
 } // namespace
 
+// ============================================================================
+// 连接管理策略: 长连接模式 (Long Connection Mode)
+// ============================================================================
+// 
+// 修改说明:
+// 1. 每条客户端连接现在可以处理多个请求 (复用连接)
+// 2. 处理完一个请求后不立即关闭连接，而是继续监听该连接上的下一个请求
+// 3. 连接只在客户端断开或出现读取错误时才关闭
+//
+// 优势:
+// - 减少连接建立/释放的开销
+// - 适合频繁的数据更新场景
+// - 降低延迟和 CPU 占用
+// - 自动与 Python 客户端的长连接模式协调工作
+//
+// 连接流程:
+//   客户端连接 → 请求1 → 响应1 → 请求2 → 响应2 → ... → 客户端断开
+// ============================================================================
+
 IpcServer::IpcServer(std::string socket_path, RequestHandler handler, size_t thread_pool_size)
     : socket_path_(std::move(socket_path)),
       sync_handler_(std::move(handler)),
@@ -166,26 +185,33 @@ void IpcServer::send_response(int client_fd, const std::string& response) {
 }
 
 void IpcServer::handle_client_sync(int client_fd) {
-    std::string request_data;
-    if (!read_request(client_fd, request_data)) {
-        ::close(client_fd);
-        return;
-    }
-
-    std::string response;
-    if (async_handler_) {
-        // Use async handler but wait for result (sync wrapper)
-        try {
-            auto future = async_handler_(request_data);
-            response = future.get();
-        } catch (const std::exception& e) {
-            std::cerr << "Handler error: " << e.what() << std::endl;
+    // 长连接模式：连接保持打开，处理该连接上的多个请求
+    // Long connection mode: keep the connection open and handle multiple requests
+    while (running_) {
+        std::string request_data;
+        if (!read_request(client_fd, request_data)) {
+            // 连接已关闭或读取失败，退出循环
+            break;
         }
-    } else if (sync_handler_) {
-        sync_handler_(request_data, response);
+
+        std::string response;
+        if (async_handler_) {
+            // Use async handler but wait for result (sync wrapper)
+            try {
+                auto future = async_handler_(request_data);
+                response = future.get();
+            } catch (const std::exception& e) {
+                std::cerr << "Handler error: " << e.what() << std::endl;
+            }
+        } else if (sync_handler_) {
+            sync_handler_(request_data, response);
+        }
+
+        send_response(client_fd, response);
+        // 注意：不在此处关闭连接，保持连接打开供下一个请求使用
     }
 
-    send_response(client_fd, response);
+    // 循环结束时关闭连接
     ::close(client_fd);
 }
 
@@ -204,7 +230,8 @@ void IpcServer::handle_client_async(int client_fd, const std::string& request_da
     }
 
     send_response(client_fd, response);
-    ::close(client_fd);
+    // 注意：不在此处关闭连接
+    // 连接由调用者（accept_loop_threaded）继续维护和复用
 }
 
 void IpcServer::worker_thread_func() {
@@ -250,18 +277,24 @@ void IpcServer::accept_loop_threaded() {
             continue;
         }
 
-        std::string request_data;
-        if (!read_request(client_fd, request_data)) {
-            ::close(client_fd);
-            continue;
-        }
+        // 长连接模式：在同一连接上处理多个请求
+        // Long connection mode: handle multiple requests on the same connection
+        while (running_) {
+            std::string request_data;
+            if (!read_request(client_fd, request_data)) {
+                // 连接已关闭或读取失败，关闭连接并接受下一个客户端
+                ::close(client_fd);
+                break;
+            }
 
-        // Queue task for worker thread
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
-            task_queue_.push({client_fd, std::move(request_data)});
+            // Queue task for worker thread
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex_);
+                task_queue_.push({client_fd, std::move(request_data)});
+            }
+            queue_cv_.notify_one();
+            // 注意：不关闭连接，继续处理该连接上的下一个请求
         }
-        queue_cv_.notify_one();
     }
 }
 

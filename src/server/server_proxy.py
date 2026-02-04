@@ -65,7 +65,8 @@ class IEC61850ServerProxy:
         self.data_model_manager = DataModelManager()
         self.ied: Optional[IED] = None
 
-        self._ipc = UDSMessageClient(socket_path, timeout_ms)
+        # 将毫秒转换为秒传递给 UDSMessageClient
+        self._ipc = UDSMessageClient(socket_path, timeout_ms / 1000.0)
 
         self._state_callbacks: List[Callable[[ServerState], None]] = []
         self._connection_callbacks: List[Callable[[str, bool], None]] = []

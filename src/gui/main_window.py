@@ -153,9 +153,12 @@ class MainWindow(QMainWindow):
         self.actionLoadConfig.triggered.connect(self._on_load_config)
         self.actionSaveConfig.triggered.connect(self._on_save_config)
         self.actionExit.triggered.connect(self.close)
+        # 日志显示切换
         self.actionShowLog.triggered.connect(self._toggle_log_panel)
         self.actionClearLog.triggered.connect(self.log_widget.clear)
+        # 关于
         self.actionAbout.triggered.connect(self._show_about)
+        # 网卡选择
         self.actionNetworkInterface.triggered.connect(self._open_network_interface_dialog)
         
         # 工具栏操作

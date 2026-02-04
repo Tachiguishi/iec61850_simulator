@@ -90,3 +90,63 @@
 - `client.list_instances` (新增)
   - payload: `{}`
   - response.payload: `{ instances: [ { instance_id, state, target_host, target_port } ] }`
+
+
+## 连接方式 - 长连接
+
+```
+Python 客户端                  C++ 服务器
+    │                               │
+    ├─ 建立连接 ────────────────→ 接受连接
+    │                               │
+    ├─ 发送请求1 ───────────────→ 读取请求1
+    │                               │
+    │ ◄─────────────── 发送响应1 ──┤
+    │                               │
+    ├─ 发送请求2 ───────────────→ 读取请求2 (连接复用 ✅)
+    │                               │
+    │ ◄─────────────── 发送响应2 ──┤
+    │                               │
+    ├─ 发送请求N ───────────────→ 读取请求N
+    │                               │
+    │ ◄─────────────── 发送响应N ──┤
+    │                               │
+    └─ 断开连接 ────────────────→ 关闭连接
+```
+
+### Python 客户端 (UDSMessageClient)
+
+```
+request()
+  │
+  ├─ connect()
+  ├─ send()
+  ├─ recv()
+  │
+  └─ return (保持连接)
+    │
+    下一次 request()
+          │
+    ├─ send() (复用连接)
+    ├─ recv()
+    └─ return
+        │
+    ... (可无限复用)
+        │
+    最后 close()
+```
+
+### C++ 服务器 (IpcServer)
+
+```
+accept_loop_threaded()
+  │
+  ├─ accept(client)
+  │
+  ├─ while running:
+  │   ├─ read_request()
+  │   ├─ queue_task()
+  │   ├─ continue (不关闭) ✅
+  │
+  └─ close(client) (读取失败时)
+```

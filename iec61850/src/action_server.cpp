@@ -758,7 +758,7 @@ bool handle_server_action(
     
     if (action == "server.get_interfaces") {
         std::lock_guard<std::mutex> lock(context.mutex);
-        LOG4CPLUS_DEBUG(server_logger(), "server.get_interfaces requested");
+        LOG4CPLUS_INFO(server_logger(), "server.get_interfaces requested");
         
         auto interfaces = network::get_network_interfaces();
         

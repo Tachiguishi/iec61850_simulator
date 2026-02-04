@@ -28,24 +28,36 @@ class IPCResponse:
 class UDSMessageClient:
     """
     Unified sync/async request/response client over Unix Domain Socket.
+    
+    长链接模式：保持连接打开以支持频繁的请求，只在出错时断开重试。
+    这样可以避免每次请求都重新建立连接的开销，适合频繁的数据状态更新。
 
     底层使用异步实现，同时提供同步和异步两种调用方式。
 
     Protocol:
     - MessagePack encoded dict
     - 4-byte big-endian length prefix
+    
+    连接管理：
+    - 长链接模式下，连接会保持打开直到主动调用 close()/close_async()
+    - 支持自动重试：第一次请求失败时会自动重新建立连接并重试
+    - 推荐在应用关闭时调用 close() 来清理资源
 
     Usage (sync):
         client = UDSMessageClient("/tmp/ipc.sock")
         response = client.request("action", {"key": "value"})
+        # ... 可以继续发送多个请求，连接保持打开
+        client.close()  # 应用结束时关闭
 
     Usage (async):
         client = UDSMessageClient("/tmp/ipc.sock")
         response = await client.request_async("action", {"key": "value"})
+        await client.close_async()
 
     Usage (async context manager):
         async with UDSMessageClient("/tmp/ipc.sock") as client:
             response = await client.request_async("action", {"key": "value"})
+            # 退出时自动关闭
     """
 
     def __init__(self, socket_path: str, timeout: float = 3.0):
@@ -64,7 +76,11 @@ class UDSMessageClient:
         self._sync_lock = threading.Lock()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-    # ==================== Async Methods ====================
+    # ==================== Connection Status ====================
+
+    def is_connected(self) -> bool:
+        """Check if the connection is currently established."""
+        return self._reader is not None and self._writer is not None
 
     async def connect_async(self) -> None:
         """Establish async connection to the Unix domain socket."""
@@ -99,6 +115,8 @@ class UDSMessageClient:
         """
         Send an async request and wait for response.
 
+        长链接模式：连接保持打开以支持频繁的请求，只在出错时断开并重试。
+
         Args:
             action: The action name to invoke.
             payload: Optional payload dict.
@@ -126,9 +144,17 @@ class UDSMessageClient:
                 await self._sendall_async(frame)
                 response = await self._recv_message_async()
             except (OSError, msgpack.ExtraData, msgpack.FormatError) as exc:
+                # 连接出现问题时，断开并重试一次
                 await self.close_async()
-                raise IPCError(f"IPC transport error: {exc}") from exc
+                try:
+                    await self.connect_async()
+                    await self._sendall_async(frame)
+                    response = await self._recv_message_async()
+                except (OSError, msgpack.ExtraData, msgpack.FormatError) as retry_exc:
+                    await self.close_async()
+                    raise IPCError(f"IPC transport error (after retry): {retry_exc}") from retry_exc
             except asyncio.TimeoutError as exc:
+                # 超时时，断开连接以重置状态
                 await self.close_async()
                 raise IPCError(f"IPC timeout: {exc}") from exc
 
@@ -140,6 +166,7 @@ class UDSMessageClient:
             err_message = error.get("message", "Unknown IPC error")
             raise IPCError(err_message)
 
+        # 注意：不在此处关闭连接，保持长链接打开供后续请求使用
         return IPCResponse(data=response.get("payload", {}))
 
     async def _sendall_async(self, data: bytes) -> None:
