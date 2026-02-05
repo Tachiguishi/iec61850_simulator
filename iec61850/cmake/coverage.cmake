@@ -12,20 +12,23 @@ function(enable_coverage_for target_name)
     message(FATAL_ERROR "lcov/genhtml not found. Please install lcov.")
   endif()
 
-  add_custom_target(coverage
-    COMMAND ${LCOV_EXECUTABLE} --directory . --zerocounters
-    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    COMMAND ${LCOV_EXECUTABLE} --directory . --capture --output-file coverage.info
-            --ignore-errors mismatch
-            --rc geninfo_unexecuted_blocks=1
-    COMMAND ${LCOV_EXECUTABLE} --remove coverage.info
-            '/usr/*'
-            '${CMAKE_BINARY_DIR}/_deps/*'
-            '${CMAKE_SOURCE_DIR}/tests/*'
-            --output-file coverage.info
-    COMMAND ${GENHTML_EXECUTABLE} coverage.info --output-directory coverage-report
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    DEPENDS ${target_name}
-    COMMENT "Generating coverage report"
-  )
+  if(NOT TARGET coverage)
+    add_custom_target(coverage
+      COMMAND ${LCOV_EXECUTABLE} --directory . --zerocounters
+      COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+      COMMAND ${LCOV_EXECUTABLE} --directory . --capture --output-file coverage.info
+              --ignore-errors mismatch
+              --rc geninfo_unexecuted_blocks=1
+      COMMAND ${LCOV_EXECUTABLE} --remove coverage.info
+              '/usr/*'
+              '${CMAKE_BINARY_DIR}/_deps/*'
+              '${CMAKE_SOURCE_DIR}/tests/*'
+              --output-file coverage.info
+      COMMAND ${GENHTML_EXECUTABLE} coverage.info --output-directory coverage-report
+      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+      COMMENT "Generating coverage report"
+    )
+  endif()
+
+  add_dependencies(coverage ${target_name})
 endfunction()

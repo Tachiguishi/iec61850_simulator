@@ -45,6 +45,15 @@ bool remove_ip_address(const std::string& interface_name,
                       int prefix_len = 24);
 
 /**
+ * 通过label删除指定网卡上的所有IP地址
+ * @param interface_name 网卡名称
+ * @param label 标签
+ * @return 成功返回true
+ */
+bool remove_by_label(const std::string& interface_name,
+                     const std::string& label);
+
+/**
  * 检查IP地址是否需要配置（不是0.0.0.0或127.*）
  */
 bool should_configure_ip(const std::string& ip_address);

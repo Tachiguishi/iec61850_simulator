@@ -44,6 +44,15 @@ set(LOG4CPLUS_BUILD_LOGGINGSERVER OFF CACHE BOOL "log4cplus logging server" FORC
 
 FetchContent_MakeAvailable(libiec61850 msgpack log4cplus)
 
+include_directories(
+	${libiec61850_SOURCE_DIR}/src/iec61850/inc
+	${libiec61850_SOURCE_DIR}/src/common/inc
+	${libiec61850_SOURCE_DIR}/src/mms/inc
+	${libiec61850_SOURCE_DIR}/src/logging
+	${libiec61850_SOURCE_DIR}/hal/inc
+	${msgpack_SOURCE_DIR}/include
+)
+
 # Find libnl
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNL REQUIRED libnl-3.0 libnl-route-3.0)

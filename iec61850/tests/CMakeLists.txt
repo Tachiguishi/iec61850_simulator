@@ -15,33 +15,44 @@ FetchContent_MakeAvailable(googletest)
 
 set(CMAKE_BUILD_TYPE ${OLD_CMAKE_BUILD_TYPE} CACHE STRING "Build type" FORCE)
 
-add_executable(action_server_tests
-  action_server_test.cpp
-  test_helpers.cpp
-  ../src/action_server.cpp
-  ../src/msgpack_codec.cpp
-  ../src/logger.cpp
-  ../src/core_context.cpp
-  ../src/network_config.cpp
-)
+option(ENABLE_COVERAGE "Enable coverage reporting" ON)
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/coverage.cmake)
 
 add_compile_definitions(
   MSGPACK_NO_BOOST
 )
 
-option(ENABLE_COVERAGE "Enable coverage reporting" ON)
-include(${CMAKE_CURRENT_LIST_DIR}/../cmake/coverage.cmake)
-
-target_include_directories(action_server_tests PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src
-  ${libiec61850_SOURCE_DIR}/src/iec61850/inc
-  ${libiec61850_SOURCE_DIR}/src/common/inc
-  ${libiec61850_SOURCE_DIR}/src/mms/inc
-  ${libiec61850_SOURCE_DIR}/src/logging
-  ${libiec61850_SOURCE_DIR}/hal/inc
-  ${msgpack_SOURCE_DIR}/include
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/src
   ${LIBNL_INCLUDE_DIRS}
+)
+
+add_executable(network_config_tests
+  network_config_test.cpp
+  ${CMAKE_SOURCE_DIR}/src/network_config.cpp
+  ${CMAKE_SOURCE_DIR}/src/logger.cpp
+)
+
+target_link_libraries(network_config_tests PRIVATE
+  GTest::gtest
+  GTest::gtest_main
+  ${LIBNL_LIBRARIES}
+)
+
+if(TARGET log4cplus::log4cplus)
+  target_link_libraries(network_config_tests PRIVATE log4cplus::log4cplus)
+elseif(TARGET log4cplus)
+  target_link_libraries(network_config_tests PRIVATE log4cplus)
+endif()
+
+add_executable(action_server_tests
+  action_server_test.cpp
+  test_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/src/action_server.cpp
+  ${CMAKE_SOURCE_DIR}/src/msgpack_codec.cpp
+  ${CMAKE_SOURCE_DIR}/src/logger.cpp
+  ${CMAKE_SOURCE_DIR}/src/core_context.cpp
+  ${CMAKE_SOURCE_DIR}/src/network_config.cpp
 )
 
 target_link_libraries(action_server_tests PRIVATE
@@ -52,6 +63,7 @@ target_link_libraries(action_server_tests PRIVATE
 )
 
 if(ENABLE_COVERAGE)
+  enable_coverage_for(network_config_tests)
   enable_coverage_for(action_server_tests)
 endif()
 
@@ -66,4 +78,5 @@ elseif(TARGET log4cplus)
 endif()
 
 include(GoogleTest)
+gtest_discover_tests(network_config_tests)
 gtest_discover_tests(action_server_tests)

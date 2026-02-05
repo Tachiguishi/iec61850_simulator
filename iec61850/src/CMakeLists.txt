@@ -2,12 +2,6 @@ aux_source_directory(. SRC_LIST)
 add_executable(iec61850_core ${SRC_LIST})
 
 target_include_directories(iec61850_core PRIVATE
-	${libiec61850_SOURCE_DIR}/src/iec61850/inc
-	${libiec61850_SOURCE_DIR}/src/common/inc
-	${libiec61850_SOURCE_DIR}/src/mms/inc
-	${libiec61850_SOURCE_DIR}/src/logging
-	${libiec61850_SOURCE_DIR}/hal/inc
-	${msgpack_SOURCE_DIR}/include
 	${LIBNL_INCLUDE_DIRS}
 )
 target_link_libraries(iec61850_core PRIVATE iec61850 ${LIBNL_LIBRARIES})

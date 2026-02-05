@@ -145,15 +145,17 @@ bool add_ip_address(const std::string& interface_name,
                             << (label.empty() ? "" : " label " + label));
     
     ret = rtnl_addr_add(sock, addr, 0);
-    if (ret < 0 && ret != -17) {  // -17 is EEXIST (File exists)
-        LOG4CPLUS_ERROR(logger(), "Failed to add IP address: " << nl_geterror(ret));
+    // -17 is EEXIST, -6 can also indicate object already exists with different label
+    if (ret < 0 && ret != -17 && ret != -6) {
+        LOG4CPLUS_ERROR(logger(), "Failed to add IP address: " << nl_geterror(ret) << "(" << ret << ")");
         rtnl_addr_put(addr);
         nl_socket_free(sock);
         return false;
     }
-    
-    if (ret == -17) {
-        LOG4CPLUS_WARN(logger(), "IP address already exists: " << ip_address);
+
+    if (ret == -17 || ret == -6) {
+        LOG4CPLUS_WARN(logger(), "IP address already exists or label conflict: " << ip_address 
+                                << " (error code: " << ret << ")");
     } else {
         LOG4CPLUS_INFO(logger(), "Successfully added IP " << ip_address << " to " << interface_name);
     }
@@ -224,21 +226,120 @@ bool remove_ip_address(const std::string& interface_name,
                             << " from " << interface_name);
     
     ret = rtnl_addr_delete(sock, addr, 0);
-    if (ret < 0 && ret != -99) {  // -99 is EADDRNOTAVAIL (Cannot assign requested address)
-        LOG4CPLUS_ERROR(logger(), "Failed to remove IP address: " << nl_geterror(ret));
+    // -99 is EADDRNOTAVAIL, -19 is ENODEV or invalid address
+    if (ret < 0 && ret != -99 && ret != -19) {
+        LOG4CPLUS_ERROR(logger(), "Failed to remove IP address: " << nl_geterror(ret) << "(" << ret << ")");
         rtnl_addr_put(addr);
         nl_socket_free(sock);
         return false;
     }
     
-    if (ret == -99) {
-        LOG4CPLUS_WARN(logger(), "IP address does not exist: " << ip_address);
+    if (ret == -99 || ret == -19) {
+        LOG4CPLUS_WARN(logger(), "IP address does not exist: " << ip_address 
+                                << " (error code: " << ret << ")");
     } else {
         LOG4CPLUS_INFO(logger(), "Successfully removed IP " << ip_address << " from " << interface_name);
     }
     
     rtnl_addr_put(addr);
     nl_socket_free(sock);
+    return true;
+}
+
+bool remove_by_label(const std::string& interface_name,
+                     const std::string& label) {
+    
+    if (label.empty()) {
+        LOG4CPLUS_ERROR(logger(), "Label cannot be empty for remove_by_label");
+        return false;
+    }
+    
+    // 初始化netlink socket
+    struct nl_sock* sock = nl_socket_alloc();
+    if (!sock) {
+        LOG4CPLUS_ERROR(logger(), "Failed to allocate netlink socket");
+        return false;
+    }
+    
+    if (nl_connect(sock, NETLINK_ROUTE) < 0) {
+        LOG4CPLUS_ERROR(logger(), "Failed to connect netlink socket");
+        nl_socket_free(sock);
+        return false;
+    }
+    
+    // 获取网卡的interface index
+    int if_index = if_nametoindex(interface_name.c_str());
+    if (if_index == 0) {
+        LOG4CPLUS_ERROR(logger(), "Failed to get interface index for " << interface_name);
+        nl_socket_free(sock);
+        return false;
+    }
+    
+    // 分配地址缓存
+    struct nl_cache* addr_cache = nullptr;
+    int ret = rtnl_addr_alloc_cache(sock, &addr_cache);
+    if (ret < 0 || !addr_cache) {
+        LOG4CPLUS_ERROR(logger(), "Failed to allocate address cache: " << nl_geterror(ret));
+        nl_socket_free(sock);
+        return false;
+    }
+    
+    LOG4CPLUS_INFO(logger(), "Removing addresses with label '" << label 
+                            << "' from " << interface_name);
+    
+    bool removed_any = false;
+    int removed_count = 0;
+    
+    // 遍历地址缓存
+    struct rtnl_addr* addr = (struct rtnl_addr*)nl_cache_get_first(addr_cache);
+    while (addr) {
+        // 检查是否是目标接口
+        if (rtnl_addr_get_ifindex(addr) == if_index) {
+            // 获取地址的label
+            const char* addr_label = rtnl_addr_get_label(addr);
+            
+            // 如果label匹配，删除这个地址
+            if (addr_label && std::string(addr_label) == label) {
+                // 获取IP地址用于日志
+                struct nl_addr* local = rtnl_addr_get_local(addr);
+                char ip_str[INET_ADDRSTRLEN] = {0};
+                if (local) {
+                    void* addr_data = nl_addr_get_binary_addr(local);
+                    if (addr_data) {
+                        inet_ntop(AF_INET, addr_data, ip_str, INET_ADDRSTRLEN);
+                    }
+                }
+                
+                LOG4CPLUS_INFO(logger(), "Removing address " << ip_str 
+                                        << " with label '" << label << "'");
+                
+                // 删除地址
+                ret = rtnl_addr_delete(sock, addr, 0);
+                if (ret < 0 && ret != -99) {  // -99 is EADDRNOTAVAIL
+                    LOG4CPLUS_ERROR(logger(), "Failed to remove address: " << nl_geterror(ret));
+                } else {
+                    removed_any = true;
+                    removed_count++;
+                    LOG4CPLUS_DEBUG(logger(), "Successfully removed address " << ip_str);
+                }
+            }
+        }
+        
+        // 获取下一个地址
+        addr = (struct rtnl_addr*)nl_cache_get_next((struct nl_object*)addr);
+    }
+    
+    nl_cache_free(addr_cache);
+    nl_socket_free(sock);
+    
+    if (removed_any) {
+        LOG4CPLUS_INFO(logger(), "Removed " << removed_count 
+                                << " address(es) with label '" << label << "'");
+    } else {
+        LOG4CPLUS_WARN(logger(), "No addresses found with label '" << label 
+                                << "' on " << interface_name);
+    }
+    
     return true;
 }
 
