@@ -102,3 +102,9 @@ TEST(NetworkConfig, SetIpAddressAndRemoveByLabelSuccessfully) {
 	// 通过标签移除IP
 	EXPECT_TRUE(network::remove_by_label(test_interface, test_label)) << "Failed to remove IP addresses by label";
 }
+
+TEST(NetworkConfig, ShouldConfigureIpReturnsFalseForInvalidAddresses) {
+	EXPECT_FALSE(network::should_configure_ip("0.0.0.0"));
+	EXPECT_FALSE(network::should_configure_ip("127.0.0.1"));
+	EXPECT_TRUE(network::should_configure_ip("192.168.1.1"));
+}
