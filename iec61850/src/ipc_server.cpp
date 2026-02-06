@@ -1,5 +1,6 @@
 #include "ipc_server.hpp"
 
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -11,40 +12,6 @@
 
 namespace ipc {
 
-namespace {
-std::string g_socket_path;
-
-void cleanup_socket_file() {
-    if (!g_socket_path.empty()) {
-        ::unlink(g_socket_path.c_str());
-    }
-}
-} // namespace
-
-// ============================================================================
-// 连接管理策略: 长连接模式 (Long Connection Mode)
-// ============================================================================
-// 
-// 修改说明:
-// 1. 每条客户端连接现在可以处理多个请求 (复用连接)
-// 2. 处理完一个请求后不立即关闭连接，而是继续监听该连接上的下一个请求
-// 3. 连接只在客户端断开或出现读取错误时才关闭
-//
-// 优势:
-// - 减少连接建立/释放的开销
-// - 适合频繁的数据更新场景
-// - 降低延迟和 CPU 占用
-// - 自动与 Python 客户端的长连接模式协调工作
-//
-// 连接流程:
-//   客户端连接 → 请求1 → 响应1 → 请求2 → 响应2 → ... → 客户端断开
-// ============================================================================
-
-IpcServer::IpcServer(std::string socket_path, RequestHandler handler, size_t thread_pool_size)
-    : socket_path_(std::move(socket_path)),
-      sync_handler_(std::move(handler)),
-      thread_pool_size_(thread_pool_size) {}
-
 IpcServer::IpcServer(std::string socket_path, AsyncRequestHandler handler, size_t thread_pool_size)
     : socket_path_(std::move(socket_path)),
       async_handler_(std::move(handler)),
@@ -55,11 +22,6 @@ IpcServer::~IpcServer() {
 }
 
 bool IpcServer::setup_socket() {
-    if (g_socket_path.empty()) {
-        g_socket_path = socket_path_;
-        std::atexit(cleanup_socket_file);
-    }
-
     server_fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (server_fd_ < 0) {
         std::perror("socket");
@@ -98,19 +60,38 @@ bool IpcServer::start() {
         return false;
     }
 
+    // Create epoll instance for monitoring client connections
+    epoll_fd_ = ::epoll_create1(EPOLL_CLOEXEC);
+    if (epoll_fd_ < 0) {
+        std::perror("epoll_create1");
+        ::close(server_fd_);
+        server_fd_ = -1;
+        return false;
+    }
+
+    // Add server socket to epoll for accepting connections
+    epoll_event ev{};
+    ev.events = EPOLLIN;
+    ev.data.fd = server_fd_;
+    if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, server_fd_, &ev) < 0) {
+        std::perror("epoll_ctl ADD server_fd");
+        ::close(epoll_fd_);
+        epoll_fd_ = -1;
+        ::close(server_fd_);
+        server_fd_ = -1;
+        return false;
+    }
+
     running_ = true;
 
-    if (thread_pool_size_ > 0) {
-        // Start worker thread pool for concurrent handling
-        pool_running_ = true;
-        for (size_t i = 0; i < thread_pool_size_; ++i) {
-            worker_threads_.emplace_back(&IpcServer::worker_thread_func, this);
-        }
-        accept_thread_ = std::thread(&IpcServer::accept_loop_threaded, this);
-    } else {
-        // Single-threaded synchronous mode
-        accept_thread_ = std::thread(&IpcServer::accept_loop, this);
+    // Start worker thread pool for concurrent handling
+    pool_running_ = true;
+    for (size_t i = 0; i < thread_pool_size_; ++i) {
+        worker_threads_.emplace_back(&IpcServer::worker_thread_func, this);
     }
+
+    // Start accept/epoll thread
+    accept_thread_ = std::thread(&IpcServer::accept_loop_threaded, this);
 
     return true;
 }
@@ -133,11 +114,26 @@ void IpcServer::stop() {
         worker_threads_.clear();
     }
 
-    // Close server socket to unblock accept()
+    // Close server socket to unblock epoll_wait()
     if (server_fd_ >= 0) {
         ::shutdown(server_fd_, SHUT_RDWR);
         ::close(server_fd_);
         server_fd_ = -1;
+    }
+
+    // Close all client connections
+    {
+        std::lock_guard<std::mutex> lock(client_fds_mutex_);
+        for (int fd : client_fds_) {
+            ::close(fd);
+        }
+        client_fds_.clear();
+    }
+
+    // Close epoll
+    if (epoll_fd_ >= 0) {
+        ::close(epoll_fd_);
+        epoll_fd_ = -1;
     }
 
     // Wait for accept thread
@@ -184,54 +180,16 @@ void IpcServer::send_response(int client_fd, const std::string& response) {
     }
 }
 
-void IpcServer::handle_client_sync(int client_fd) {
-    // 长连接模式：连接保持打开，处理该连接上的多个请求
-    // Long connection mode: keep the connection open and handle multiple requests
-    while (running_) {
-        std::string request_data;
-        if (!read_request(client_fd, request_data)) {
-            // 连接已关闭或读取失败，退出循环
-            break;
-        }
-
-        std::string response;
-        if (async_handler_) {
-            // Use async handler but wait for result (sync wrapper)
-            try {
-                auto future = async_handler_(request_data);
-                response = future.get();
-            } catch (const std::exception& e) {
-                std::cerr << "Handler error: " << e.what() << std::endl;
-            }
-        } else if (sync_handler_) {
-            sync_handler_(request_data, response);
-        }
-
-        send_response(client_fd, response);
-        // 注意：不在此处关闭连接，保持连接打开供下一个请求使用
-    }
-
-    // 循环结束时关闭连接
-    ::close(client_fd);
-}
-
 void IpcServer::handle_client_async(int client_fd, const std::string& request_data) {
     std::string response;
 
-    if (async_handler_) {
-        try {
-            auto future = async_handler_(request_data);
-            response = future.get();
-        } catch (const std::exception& e) {
-            std::cerr << "Async handler error: " << e.what() << std::endl;
-        }
-    } else if (sync_handler_) {
-        sync_handler_(request_data, response);
+    try {
+        response = async_handler_(request_data);
+    } catch (const std::exception& e) {
+        std::cerr << "Async handler error: " << e.what() << std::endl;
     }
 
     send_response(client_fd, response);
-    // 注意：不在此处关闭连接
-    // 连接由调用者（accept_loop_threaded）继续维护和复用
 }
 
 void IpcServer::worker_thread_func() {
@@ -253,47 +211,84 @@ void IpcServer::worker_thread_func() {
     }
 }
 
-void IpcServer::accept_loop() {
-    while (running_) {
-        int client_fd = ::accept(server_fd_, nullptr, nullptr);
-        if (client_fd < 0) {
-            if (running_) {
-                std::perror("accept");
-            }
-            continue;
-        }
-
-        handle_client_sync(client_fd);
-    }
-}
-
 void IpcServer::accept_loop_threaded() {
+    // 使用 epoll 在单个线程中高效处理所有连接和请求
+    // Use epoll to efficiently handle all connections and requests in a single thread
+    const int MAX_EVENTS = 32;
+    epoll_event events[MAX_EVENTS];
+
     while (running_) {
-        int client_fd = ::accept(server_fd_, nullptr, nullptr);
-        if (client_fd < 0) {
+        int nfds = ::epoll_wait(epoll_fd_, events, MAX_EVENTS, 1000); // 1s timeout
+        if (nfds < 0) {
             if (running_) {
-                std::perror("accept");
+                std::perror("epoll_wait");
             }
             continue;
         }
 
-        // 长连接模式：在同一连接上处理多个请求
-        // Long connection mode: handle multiple requests on the same connection
-        while (running_) {
-            std::string request_data;
-            if (!read_request(client_fd, request_data)) {
-                // 连接已关闭或读取失败，关闭连接并接受下一个客户端
-                ::close(client_fd);
-                break;
-            }
+        for (int i = 0; i < nfds; ++i) {
+            int fd = events[i].data.fd;
 
-            // Queue task for worker thread
-            {
-                std::lock_guard<std::mutex> lock(queue_mutex_);
-                task_queue_.push({client_fd, std::move(request_data)});
+            if (fd == server_fd_) {
+                // New client connection
+                int client_fd = ::accept(server_fd_, nullptr, nullptr);
+                if (client_fd < 0) {
+                    std::perror("accept");
+                    continue;
+                }
+
+                // Add client socket to epoll for monitoring
+                epoll_event cli_ev{};
+                cli_ev.events = EPOLLIN | EPOLLRDHUP;
+                cli_ev.data.fd = client_fd;
+                if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, client_fd, &cli_ev) < 0) {
+                    std::perror("epoll_ctl ADD client_fd");
+                    ::close(client_fd);
+                    continue;
+                }
+
+                // Record the client connection
+                {
+                    std::lock_guard<std::mutex> lock(client_fds_mutex_);
+                    client_fds_.insert(client_fd);
+                }
+            } else {
+                // Client connection has data to read or is closed
+                if (events[i].events & (EPOLLRDHUP | EPOLLERR | EPOLLHUP)) {
+                    // Connection closed by peer or error
+                    ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
+                    ::close(fd);
+
+                    {
+                        std::lock_guard<std::mutex> lock(client_fds_mutex_);
+                        client_fds_.erase(fd);
+                    }
+                    continue;
+                }
+
+                if (events[i].events & EPOLLIN) {
+                    // Data available to read
+                    std::string request_data;
+                    if (!read_request(fd, request_data)) {
+                        // Read failed, close connection
+                        ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
+                        ::close(fd);
+
+                        {
+                            std::lock_guard<std::mutex> lock(client_fds_mutex_);
+                            client_fds_.erase(fd);
+                        }
+                        continue;
+                    }
+
+                    // Queue the task for worker thread pool
+                    {
+                        std::lock_guard<std::mutex> lock(queue_mutex_);
+                        task_queue_.push({fd, std::move(request_data)});
+                    }
+                    queue_cv_.notify_one();
+                }
             }
-            queue_cv_.notify_one();
-            // 注意：不关闭连接，继续处理该连接上的下一个请求
         }
     }
 }

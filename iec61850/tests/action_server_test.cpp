@@ -137,7 +137,7 @@ TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
     msgpack::object response;
     execute_action("server.set_data_value", context, payload_handle.get(), true, response);
 
-    EXPECT_EQ(get_error_message(response), "Invalid request");
+    EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, reference, or value");
 }
 
 TEST(ActionServer, GetValuesInvalidRequestReturnsError) {
@@ -155,7 +155,7 @@ TEST(ActionServer, GetValuesInvalidRequestReturnsError) {
     msgpack::object response;
     execute_action("server.get_values", context, payload_handle.get(), true, response);
 
-    EXPECT_EQ(get_error_message(response), "Invalid request");
+    EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, or references array");
 }
 
 TEST(ActionServer, GetClientsReturnsPayload) {

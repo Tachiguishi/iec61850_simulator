@@ -79,9 +79,10 @@ int main(int argc, char** argv) {
 
     auto* context = new BackendContext();
 
-    ipc::IpcServer server(socket_path, [context](const std::string& request_bytes, std::string& response_bytes) {
+    ipc::IpcServer server(socket_path, [context](const std::string& request_bytes) {
         msgpack::sbuffer buffer;
         msgpack::packer<msgpack::sbuffer> pk(&buffer);
+        std::string response_bytes;
 
         ipc::codec::Request request;
         try {
@@ -98,7 +99,7 @@ int main(int argc, char** argv) {
             pk.pack("error");
             ipc::codec::pack_error(pk, std::string("Decode error: ") + exc.what());
             response_bytes.assign(buffer.data(), buffer.size());
-            return;
+            return response_bytes;
         }
 
         LOG4CPLUS_INFO(core_logger(), "IPC action: " << request.action << " id=" << request.id);
@@ -119,6 +120,7 @@ int main(int argc, char** argv) {
         }
 
         response_bytes.assign(buffer.data(), buffer.size());
+        return response_bytes;
     });
 
     if (!server.start()) {

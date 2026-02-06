@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <cstring>
 
 #include <log4cplus/loggingmacros.h>
 
@@ -33,6 +34,32 @@ std::string extract_instance_id(const msgpack::object& payload) {
         }
     }
     return "";
+}
+
+// Helper function to pack error response
+void pack_error_response(msgpack::packer<msgpack::sbuffer>& pk, const std::string& error_msg) {
+    pk.pack("payload");
+    pk.pack_map(0);
+    pk.pack("error");
+    ipc::codec::pack_error(pk, error_msg);
+}
+
+// Helper function to validate instance_id from payload
+std::string validate_and_extract_instance_id(
+    const msgpack::object& payload,
+    const std::string& action,
+    msgpack::packer<msgpack::sbuffer>& pk,
+    bool& error_occurred) {
+    
+    std::string instance_id = extract_instance_id(payload);
+    if (instance_id.empty()) {
+        LOG4CPLUS_ERROR(server_logger(), action << ": instance_id is required");
+        pack_error_response(pk, "instance_id is required");
+        error_occurred = true;
+        return "";
+    }
+    error_occurred = false;
+    return instance_id;
 }
 
 FunctionalConstraint map_fc(const std::string& fc) {
@@ -100,7 +127,13 @@ MmsValue* create_value_from_msg(const msgpack::object& obj, DataAttributeType ty
         case IEC61850_VISIBLE_STRING_255:
         case IEC61850_UNICODE_STRING_255: {
             std::string value = ipc::codec::as_string(obj, "");
-            return MmsValue_newVisibleString(const_cast<char*>(value.c_str()));
+            // Use strdup to allocate a copy of the string that persists
+            char* str_copy = strdup(value.c_str());
+            if (!str_copy) {
+                LOG4CPLUS_ERROR(server_logger(), "Failed to allocate string memory");
+                return nullptr;
+            }
+            return MmsValue_newVisibleString(str_copy);
         }
         default:
             return nullptr;
@@ -308,7 +341,14 @@ void update_attribute_value(IedServer server, DataAttribute* da, const msgpack::
         case IEC61850_VISIBLE_STRING_255:
         case IEC61850_UNICODE_STRING_255: {
             std::string value = ipc::codec::as_string(value_obj, "");
-            IedServer_updateVisibleStringAttributeValue(server, da, const_cast<char*>(value.c_str()));
+            // updateVisibleStringAttributeValue makes a copy internally, so this is safe
+            char* str_copy = strdup(value.c_str());
+            if (str_copy) {
+                IedServer_updateVisibleStringAttributeValue(server, da, str_copy);
+                free(str_copy);
+            } else {
+                LOG4CPLUS_ERROR(server_logger(), "Failed to allocate string memory for update");
+            }
             break;
         }
         default:
@@ -328,39 +368,26 @@ bool handle_server_action(
     msgpack::packer<msgpack::sbuffer>& pk) {
 
     if (!has_payload || payload.type != msgpack::type::MAP) {
-        LOG4CPLUS_ERROR(server_logger(),  action << " missing payload");
-        pk.pack("payload");
-        pk.pack_map(0);
-        pk.pack("error");
-        ipc::codec::pack_error(pk, "Missing payload");
+        LOG4CPLUS_ERROR(server_logger(), action << " missing payload");
+        pack_error_response(pk, "Missing payload");
         return true;
     }
-
-    // 提取instance_id，必须提供
-    std::string instance_id = extract_instance_id(payload);
     
     if (action == "server.start") {
         std::lock_guard<std::mutex> lock(context.mutex);
 
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(server_logger(), "server.start: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+        bool error_occurred = false;
+        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        if (error_occurred) {
             return true;
         }
         
-        LOG4CPLUS_INFO(server_logger(), "server.start requested for instance " + instance_id);
+        LOG4CPLUS_INFO(server_logger(), "server.start requested for instance " << instance_id);
 
         auto* inst = context.get_server_instance(instance_id);
         if (!inst || !inst->server || !inst->model) {
-            LOG4CPLUS_ERROR(server_logger(), "server.start: server not initialized, call server.load_model first");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Server not initialized. Call server.load_model first");
+            LOG4CPLUS_ERROR(server_logger(), "server.start: server not initialized for instance " << instance_id);
+            pack_error_response(pk, "Server not initialized. Call server.load_model first");
             return true;
         }
 
@@ -420,17 +447,13 @@ bool handle_server_action(
     if (action == "server.stop") {
         std::lock_guard<std::mutex> lock(context.mutex);
         
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(server_logger(), "server.stop: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+        bool error_occurred = false;
+        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        if (error_occurred) {
             return true;
         }
         
-        LOG4CPLUS_INFO(server_logger(), "server.stop requested for instance " + instance_id);
+        LOG4CPLUS_INFO(server_logger(), "server.stop requested for instance " << instance_id);
 
         auto* inst = context.get_server_instance(instance_id);
         if (inst && inst->server && inst->running) {
@@ -449,17 +472,13 @@ bool handle_server_action(
     if (action == "server.remove") {
         std::lock_guard<std::mutex> lock(context.mutex);
         
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(server_logger(), "server.remove: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+        bool error_occurred = false;
+        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        if (error_occurred) {
             return true;
         }
         
-        LOG4CPLUS_INFO(server_logger(), "server.remove requested for instance " + instance_id);
+        LOG4CPLUS_INFO(server_logger(), "server.remove requested for instance " << instance_id);
 
         auto* inst = context.get_server_instance(instance_id);
         if (inst) {
@@ -505,27 +524,20 @@ bool handle_server_action(
     if (action == "server.load_model") {
         std::lock_guard<std::mutex> lock(context.mutex);
 
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(server_logger(), "server.load_model: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+        bool error_occurred = false;
+        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        if (error_occurred) {
             return true;
         }
         
-        LOG4CPLUS_INFO(server_logger(), "server.load_model requested for instance " + instance_id);
+        LOG4CPLUS_INFO(server_logger(), "server.load_model requested for instance " << instance_id);
 
         auto model_obj = ipc::codec::find_key(payload, "model");
         auto config_obj = ipc::codec::find_key(payload, "config");
         
         if (!model_obj) {
-            LOG4CPLUS_ERROR(server_logger(), "server.load_model: model is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "model payload is required");
+            LOG4CPLUS_ERROR(server_logger(), "server.load_model: model is required for instance " << instance_id);
+            pack_error_response(pk, "model payload is required");
             return true;
         }
 
@@ -561,12 +573,15 @@ bool handle_server_action(
         if (config_obj && config_obj->type == msgpack::type::MAP) {
             if (auto max_conn_obj = ipc::codec::find_key(*config_obj, "max_connections")) {
                 max_conn = static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10));
+                LOG4CPLUS_DEBUG(server_logger(), "max_connections set to " << max_conn);
             }
             if (auto port_obj = ipc::codec::find_key(*config_obj, "port")) {
                 port = static_cast<int>(ipc::codec::as_int64(*port_obj, 102));
+                LOG4CPLUS_DEBUG(server_logger(), "port set to " << port);
             }
             if (auto ip_obj = ipc::codec::find_key(*config_obj, "ip_address")) {
                 ip_address = ipc::codec::as_string(*ip_obj, "0.0.0.0");
+                LOG4CPLUS_DEBUG(server_logger(), "ip_address set to " << ip_address);
             }
         }
         
@@ -601,13 +616,9 @@ bool handle_server_action(
     if (action == "server.set_data_value") {
         std::lock_guard<std::mutex> lock(context.mutex);
         
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(server_logger(), "server.set_data_value: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+        bool error_occurred = false;
+        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        if (error_occurred) {
             return true;
         }
         
@@ -616,11 +627,8 @@ bool handle_server_action(
         
         auto* inst = context.get_server_instance(instance_id);
         if (!inst || !inst->server || !inst->model || !ref_obj || !value_obj) {
-            LOG4CPLUS_ERROR(server_logger(), "server.set_data_value invalid request");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Invalid request");
+            LOG4CPLUS_ERROR(server_logger(), "server.set_data_value invalid request for instance " << instance_id);
+            pack_error_response(pk, "Invalid request: missing server, model, reference, or value");
             return true;
         }
 
@@ -644,13 +652,9 @@ bool handle_server_action(
     if (action == "server.get_values") {
         std::lock_guard<std::mutex> lock(context.mutex);
         
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(server_logger(), "server.get_values: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+        bool error_occurred = false;
+        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        if (error_occurred) {
             return true;
         }
         
@@ -658,11 +662,8 @@ bool handle_server_action(
         
         auto* inst = context.get_server_instance(instance_id);
         if (!inst || !inst->server || !inst->model || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
-            LOG4CPLUS_ERROR(server_logger(), "server.get_values invalid request");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Invalid request");
+            LOG4CPLUS_ERROR(server_logger(), "server.get_values invalid request for instance " << instance_id);
+            pack_error_response(pk, "Invalid request: missing server, model, or references array");
             return true;
         }
 
@@ -696,17 +697,13 @@ bool handle_server_action(
     if (action == "server.get_clients") {
         std::lock_guard<std::mutex> lock(context.mutex);
         
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(server_logger(), "server.get_clients: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+        bool error_occurred = false;
+        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        if (error_occurred) {
             return true;
         }
         
-        LOG4CPLUS_DEBUG(server_logger(), "server.get_clients requested for instance " + instance_id);
+        LOG4CPLUS_DEBUG(server_logger(), "server.get_clients requested for instance " << instance_id);
         
         auto* inst = context.get_server_instance(instance_id);
         
@@ -806,10 +803,7 @@ bool handle_server_action(
         auto iface_obj = ipc::codec::find_key(payload, "interface_name");
         if (!iface_obj) {
             LOG4CPLUS_ERROR(server_logger(), "server.set_interface: interface_name is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "interface_name is required");
+            pack_error_response(pk, "interface_name is required");
             return true;
         }
         
