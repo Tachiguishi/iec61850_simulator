@@ -38,13 +38,19 @@
 ## 动作列表
 ### Server
 - `server.start`
-  - payload: `{ instance_id?: string, config: {...}, model: {...} }`
+  - payload: `{ instance_id?: string, config: {...} }`
     - config 包含:
       - `ip_address`: 服务器监听的 IP 地址（可从 SCD Communication 节点获取）
       - `port`: 服务器监听端口（默认 102）
       - `max_connections`: 最大连接数
-    - model 包含:
+  - response.payload: `{ success: true, instance_id: string }`
+- `server.stop`
+  - payload: `{ instance_id?: string }`
+- `server.load_model`
+  - payload: `{ instance_id?: string, model: {...} }`
+    - model 结构与 SCD Communication 节点相似，包含 IED、LD、LN、DO、DA 等信息
       - `name`: IED 名称
+      - `lds`: LD 列表
       - `communication`: 通信参数字典（按访问点名称索引）
         - `ip_address`: IP 地址
         - `ip_subnet`: 子网掩码
@@ -52,11 +58,6 @@
         - `osi_ae_qualifier`: OSI 应用实体限定符
         - `gse_addresses`: GSE 地址映射
         - `smv_addresses`: SMV 地址映射
-  - response.payload: `{ success: true, instance_id: string }`
-- `server.stop`
-  - payload: `{ instance_id?: string }`
-- `server.load_model`
-  - payload: `{ instance_id?: string, model: {...} }`
 - `server.set_data_value`
   - payload: `{ instance_id?: string, reference: "IED1/LD0/..", value: <any> }`
 - `server.get_values`

@@ -27,7 +27,7 @@ has_required_caps() {
 }
 
 add_caps_gui() {
-    echo "🔐 Python 缺少网络权限, 正在请求管理员授权(GUI)..."
+    echo "🔐 ${IEC61850_CORE_BIN} 缺少网络权限, 正在请求管理员授权(GUI)..."
 
 	echo $IEC61850_CORE_BIN
     pkexec setcap "${REQUIRED_CAPS}=+ep" "$IEC61850_CORE_BIN"

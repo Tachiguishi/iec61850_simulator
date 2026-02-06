@@ -16,7 +16,8 @@ FetchContent_MakeAvailable(googletest)
 set(CMAKE_BUILD_TYPE ${OLD_CMAKE_BUILD_TYPE} CACHE STRING "Build type" FORCE)
 
 option(ENABLE_COVERAGE "Enable coverage reporting" ON)
-include(${CMAKE_CURRENT_LIST_DIR}/../cmake/coverage.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/coverage.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/capability.cmake)
 
 add_compile_definitions(
   MSGPACK_NO_BOOST
@@ -32,6 +33,8 @@ add_executable(network_config_tests
   ${CMAKE_SOURCE_DIR}/src/network_config.cpp
   ${CMAKE_SOURCE_DIR}/src/logger.cpp
 )
+
+set_capabilities_for(network_config_tests)
 
 target_link_libraries(network_config_tests PRIVATE
   GTest::gtest
@@ -61,6 +64,8 @@ target_link_libraries(action_server_tests PRIVATE
   GTest::gtest_main
   ${LIBNL_LIBRARIES}
 )
+
+set_capabilities_for(action_server_tests)
 
 if(ENABLE_COVERAGE)
   enable_coverage_for(network_config_tests)

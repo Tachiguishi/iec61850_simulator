@@ -15,7 +15,7 @@ sudo setcap 'cap_net_bind_service,cap_net_raw,cap_net_admin=+ep' $(which python3
      |
      | IPC(Unix Domain Socket)
      v
-[ 通信进程 ]
+[ 通信进程 ] ← 需要capabilities权限
   - MMS :102
   - GOOSE
   - cap_net_raw (GOOSE)
