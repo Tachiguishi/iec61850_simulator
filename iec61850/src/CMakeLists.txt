@@ -1,8 +1,11 @@
 aux_source_directory(. SRC_LIST)
+aux_source_directory(action ACTION_SRC_LIST)
+list(APPEND SRC_LIST ${ACTION_SRC_LIST})
 add_executable(iec61850_core ${SRC_LIST})
 
 target_include_directories(iec61850_core PRIVATE
 	${LIBNL_INCLUDE_DIRS}
+	${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(iec61850_core PRIVATE iec61850 ${LIBNL_LIBRARIES})
 

@@ -48,14 +48,16 @@ elseif(TARGET log4cplus)
   target_link_libraries(network_config_tests PRIVATE log4cplus)
 endif()
 
+aux_source_directory(${CMAKE_SOURCE_DIR}/src/action ACTION_SRC_LIST)
+
 add_executable(action_server_tests
   action_server_test.cpp
   test_helpers.cpp
-  ${CMAKE_SOURCE_DIR}/src/action_server.cpp
   ${CMAKE_SOURCE_DIR}/src/msgpack_codec.cpp
   ${CMAKE_SOURCE_DIR}/src/logger.cpp
   ${CMAKE_SOURCE_DIR}/src/core_context.cpp
   ${CMAKE_SOURCE_DIR}/src/network_config.cpp
+  ${ACTION_SRC_LIST}
 )
 
 target_link_libraries(action_server_tests PRIVATE

@@ -1,12 +1,15 @@
-#include "action_client.hpp"
+#include "action_base.hpp"
+#include "action_registry.hpp"
 
-#include "logger.hpp"
-#include "msgpack_codec.hpp"
+#include "../logger.hpp"
+#include "../msgpack_codec.hpp"
 
 #include <iec61850_client.h>
 
 #include <log4cplus/loggingmacros.h>
 
+#include <mutex>
+#include <string>
 #include <vector>
 
 namespace {
@@ -121,11 +124,6 @@ void pack_model(msgpack::packer<msgpack::sbuffer>& pk, IedConnection connection,
     }
 }
 
-} // namespace
-
-namespace {
-
-// 从payload中提取instance_id，必须提供instance_id
 std::string extract_instance_id(const msgpack::object& payload) {
     if (auto id_obj = ipc::codec::find_key(payload, "instance_id")) {
         std::string id = ipc::codec::as_string(*id_obj, "");
@@ -136,35 +134,41 @@ std::string extract_instance_id(const msgpack::object& payload) {
     return "";
 }
 
+bool require_instance_id(const msgpack::object& payload,
+                         const std::string& action,
+                         msgpack::packer<msgpack::sbuffer>& pk,
+                         std::string& instance_id) {
+    instance_id = extract_instance_id(payload);
+    if (instance_id.empty()) {
+        LOG4CPLUS_ERROR(client_logger(), action << ": instance_id is required");
+        pk.pack("payload");
+        pk.pack_map(0);
+        pk.pack("error");
+        ipc::codec::pack_error(pk, "instance_id is required");
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 namespace ipc::actions {
 
-bool handle_client_action(
-    const std::string& action,
-    BackendContext& context,
-    const msgpack::object& payload,
-    bool,
-    msgpack::packer<msgpack::sbuffer>& pk) {
-    
-    // 提取instance_id，必须提供
-    std::string instance_id = extract_instance_id(payload);
-    
-    if (action == "client.connect") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(client_logger(), "client.connect: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+class ClientConnectAction final : public ActionHandler {
+public:
+    const char* name() const override { return "client.connect"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
+        std::string instance_id;
+        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
             return true;
         }
-        auto host_obj = ipc::codec::find_key(payload, "host");
-        auto port_obj = ipc::codec::find_key(payload, "port");
-        auto cfg_obj = ipc::codec::find_key(payload, "config");
+
+        auto host_obj = ipc::codec::find_key(ctx.payload, "host");
+        auto port_obj = ipc::codec::find_key(ctx.payload, "port");
+        auto cfg_obj = ipc::codec::find_key(ctx.payload, "config");
         if (!host_obj || !port_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.connect invalid request");
             pk.pack("payload");
@@ -179,30 +183,29 @@ bool handle_client_action(
 
         LOG4CPLUS_INFO(client_logger(), "client.connect to " << host << ":" << port << " for instance " + instance_id);
 
-        auto* inst = context.get_or_create_client_instance(instance_id);
-        
-        // 清理旧连接
+        auto* inst = ctx.context.get_or_create_client_instance(instance_id);
+
         if (inst->connection) {
             IedConnection_close(inst->connection);
             IedConnection_destroy(inst->connection);
             inst->connection = nullptr;
         }
-        
+
         inst->connection = IedConnection_create();
         inst->target_host = host;
         inst->target_port = port;
         IedConnection connection = inst->connection;
-        
+
         if (cfg_obj && cfg_obj->type == msgpack::type::MAP) {
             if (auto timeout_obj = ipc::codec::find_key(*cfg_obj, "timeout_ms")) {
                 IedConnection_setConnectTimeout(connection, static_cast<int>(ipc::codec::as_int64(*timeout_obj, 5000)));
                 IedConnection_setRequestTimeout(connection, static_cast<int>(ipc::codec::as_int64(*timeout_obj, 5000)));
             }
         }
-        
+
         IedClientError error = IED_ERROR_OK;
         IedConnection_connect(connection, &error, host.c_str(), port);
-        
+
         if (error == IED_ERROR_OK) {
             inst->connected = true;
             LOG4CPLUS_INFO(client_logger(), "client.connect success for instance " << instance_id);
@@ -224,29 +227,29 @@ bool handle_client_action(
         }
         return true;
     }
+};
 
-    if (action == "client.disconnect") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(client_logger(), "client.disconnect: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+class ClientDisconnectAction final : public ActionHandler {
+public:
+    const char* name() const override { return "client.disconnect"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
+        std::string instance_id;
+        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
             return true;
         }
-        
+
         LOG4CPLUS_INFO(client_logger(), "client.disconnect requested for instance " + instance_id);
-        
-        auto* inst = context.get_client_instance(instance_id);
+
+        auto* inst = ctx.context.get_client_instance(instance_id);
         if (inst && inst->connection) {
             IedConnection_close(inst->connection);
             IedConnection_destroy(inst->connection);
             inst->connection = nullptr;
             inst->connected = false;
-            context.remove_client_instance(instance_id);
+            ctx.context.remove_client_instance(instance_id);
         }
         pk.pack("payload");
         ipc::codec::pack_success_payload(pk);
@@ -254,24 +257,24 @@ bool handle_client_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    if (action == "client.browse") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(client_logger(), "client.browse: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+class ClientBrowseAction final : public ActionHandler {
+public:
+    const char* name() const override { return "client.browse"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
+        std::string instance_id;
+        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
             return true;
         }
-        
-        auto* inst = context.get_client_instance(instance_id);
+
+        auto* inst = ctx.context.get_client_instance(instance_id);
         IedConnection connection = inst ? inst->connection : nullptr;
         std::string ied_name = inst ? inst->ied_name : "IED";
-        
+
         if (!connection) {
             LOG4CPLUS_ERROR(client_logger(), "client.browse when not connected");
             pk.pack("payload");
@@ -289,25 +292,25 @@ bool handle_client_action(
         }
         return true;
     }
+};
 
-    if (action == "client.read") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(client_logger(), "client.read: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+class ClientReadAction final : public ActionHandler {
+public:
+    const char* name() const override { return "client.read"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
+        std::string instance_id;
+        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
             return true;
         }
-        
-        auto ref_obj = ipc::codec::find_key(payload, "reference");
-        
-        auto* inst = context.get_client_instance(instance_id);
+
+        auto ref_obj = ipc::codec::find_key(ctx.payload, "reference");
+
+        auto* inst = ctx.context.get_client_instance(instance_id);
         IedConnection connection = inst ? inst->connection : nullptr;
-        
+
         if (!connection || !ref_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.read invalid request");
             pk.pack("payload");
@@ -374,25 +377,25 @@ bool handle_client_action(
         }
         return true;
     }
+};
 
-    if (action == "client.read_batch") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(client_logger(), "client.read_batch: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+class ClientReadBatchAction final : public ActionHandler {
+public:
+    const char* name() const override { return "client.read_batch"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
+        std::string instance_id;
+        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
             return true;
         }
-        
-        auto refs_obj = ipc::codec::find_key(payload, "references");
-        
-        auto* inst = context.get_client_instance(instance_id);
+
+        auto refs_obj = ipc::codec::find_key(ctx.payload, "references");
+
+        auto* inst = ctx.context.get_client_instance(instance_id);
         IedConnection connection = inst ? inst->connection : nullptr;
-        
+
         if (!connection || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
             LOG4CPLUS_ERROR(client_logger(), "client.read_batch invalid request");
             pk.pack("payload");
@@ -460,26 +463,26 @@ bool handle_client_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    if (action == "client.write") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
-        // 检查instance_id是否提供
-        if (instance_id.empty()) {
-            LOG4CPLUS_ERROR(client_logger(), "client.write: instance_id is required");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "instance_id is required");
+class ClientWriteAction final : public ActionHandler {
+public:
+    const char* name() const override { return "client.write"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
+        std::string instance_id;
+        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
             return true;
         }
-        
-        auto ref_obj = ipc::codec::find_key(payload, "reference");
-        auto value_obj = ipc::codec::find_key(payload, "value");
-        
-        auto* inst = context.get_client_instance(instance_id);
+
+        auto ref_obj = ipc::codec::find_key(ctx.payload, "reference");
+        auto value_obj = ipc::codec::find_key(ctx.payload, "value");
+
+        auto* inst = ctx.context.get_client_instance(instance_id);
         IedConnection connection = inst ? inst->connection : nullptr;
-        
+
         if (!connection || !ref_obj || !value_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.write invalid request");
             pk.pack("payload");
@@ -548,17 +551,24 @@ bool handle_client_action(
         }
         return true;
     }
-    
-    if (action == "client.list_instances") {
-        std::lock_guard<std::mutex> lock(context.mutex);
+};
+
+class ClientListInstancesAction final : public ActionHandler {
+public:
+    const char* name() const override { return "client.list_instances"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
         LOG4CPLUS_DEBUG(client_logger(), "client.list_instances requested");
-        
+
         pk.pack("payload");
         pk.pack_map(1);
         pk.pack("instances");
-        pk.pack_array(context.client_instances.size());
-        
-        for (const auto& [id, inst] : context.client_instances) {
+        pk.pack_array(ctx.context.client_instances.size());
+
+        for (const auto& entry : ctx.context.client_instances) {
+            const auto& id = entry.first;
+            const auto& inst = entry.second;
             pk.pack_map(4);
             pk.pack("instance_id");
             pk.pack(id);
@@ -569,13 +579,21 @@ bool handle_client_action(
             pk.pack("target_port");
             pk.pack(inst->target_port);
         }
-        
+
         pk.pack("error");
         pk.pack_nil();
         return true;
     }
+};
 
-    return false;
+void register_client_actions(ActionRegistry& registry) {
+    registry.add(std::make_unique<ClientConnectAction>());
+    registry.add(std::make_unique<ClientDisconnectAction>());
+    registry.add(std::make_unique<ClientBrowseAction>());
+    registry.add(std::make_unique<ClientReadAction>());
+    registry.add(std::make_unique<ClientReadBatchAction>());
+    registry.add(std::make_unique<ClientWriteAction>());
+    registry.add(std::make_unique<ClientListInstancesAction>());
 }
 
 } // namespace ipc::actions

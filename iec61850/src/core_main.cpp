@@ -1,6 +1,5 @@
 #include "ipc_server.hpp"
-#include "action_client.hpp"
-#include "action_server.hpp"
+#include "action/action.hpp"
 #include "core_context.hpp"
 #include "logger.hpp"
 #include "msgpack_codec.hpp"
@@ -80,47 +79,7 @@ int main(int argc, char** argv) {
     auto* context = new BackendContext();
 
     ipc::IpcServer server(socket_path, [context](const std::string& request_bytes) {
-        msgpack::sbuffer buffer;
-        msgpack::packer<msgpack::sbuffer> pk(&buffer);
-        std::string response_bytes;
-
-        ipc::codec::Request request;
-        try {
-            request = ipc::codec::decode_request(request_bytes);
-        } catch (const std::exception& exc) {
-            LOG4CPLUS_ERROR(core_logger(), "Decode error: " << exc.what());
-            pk.pack_map(4);
-            pk.pack("id");
-            pk.pack("");
-            pk.pack("type");
-            pk.pack("response");
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, std::string("Decode error: ") + exc.what());
-            response_bytes.assign(buffer.data(), buffer.size());
-            return response_bytes;
-        }
-
-        LOG4CPLUS_INFO(core_logger(), "IPC action: " << request.action << " id=" << request.id);
-
-        pk.pack_map(4);
-        pk.pack("id");
-        pk.pack(request.id);
-        pk.pack("type");
-        pk.pack("response");
-
-        if (!ipc::actions::handle_server_action(request.action, *context, request.payload, request.has_payload, pk) &&
-            !ipc::actions::handle_client_action(request.action, *context, request.payload, request.has_payload, pk)) {
-            LOG4CPLUS_WARN(core_logger(), "Unknown action: " << request.action);
-            pk.pack("payload");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Unknown action");
-        }
-
-        response_bytes.assign(buffer.data(), buffer.size());
-        return response_bytes;
+        return ipc::actions::handle_action(request_bytes, *context);
     });
 
     if (!server.start()) {

@@ -1,15 +1,18 @@
-#include "action_server.hpp"
+#include "action_base.hpp"
+#include "action_registry.hpp"
 
-#include "logger.hpp"
-#include "msgpack_codec.hpp"
-#include "network_config.hpp"
+#include "../logger.hpp"
+#include "../msgpack_codec.hpp"
+#include "../network_config.hpp"
 
 #include <iec61850_dynamic_model.h>
 
 #include <algorithm>
 #include <chrono>
-#include <ctime>
 #include <cstring>
+#include <ctime>
+#include <mutex>
+#include <string>
 
 #include <log4cplus/loggingmacros.h>
 
@@ -25,7 +28,6 @@ std::string now_iso() {
     return buffer;
 }
 
-// 从payload中提取instance_id，必须提供instance_id
 std::string extract_instance_id(const msgpack::object& payload) {
     if (auto id_obj = ipc::codec::find_key(payload, "instance_id")) {
         std::string id = ipc::codec::as_string(*id_obj, "");
@@ -36,7 +38,6 @@ std::string extract_instance_id(const msgpack::object& payload) {
     return "";
 }
 
-// Helper function to pack error response
 void pack_error_response(msgpack::packer<msgpack::sbuffer>& pk, const std::string& error_msg) {
     pk.pack("payload");
     pk.pack_map(0);
@@ -44,13 +45,20 @@ void pack_error_response(msgpack::packer<msgpack::sbuffer>& pk, const std::strin
     ipc::codec::pack_error(pk, error_msg);
 }
 
-// Helper function to validate instance_id from payload
+bool ensure_payload_map(const ipc::actions::ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) {
+    if (!ctx.has_payload || ctx.payload.type != msgpack::type::MAP) {
+        LOG4CPLUS_ERROR(server_logger(), ctx.action << " missing payload");
+        pack_error_response(pk, "Missing payload");
+        return false;
+    }
+    return true;
+}
+
 std::string validate_and_extract_instance_id(
     const msgpack::object& payload,
     const std::string& action,
     msgpack::packer<msgpack::sbuffer>& pk,
     bool& error_occurred) {
-    
     std::string instance_id = extract_instance_id(payload);
     if (instance_id.empty()) {
         LOG4CPLUS_ERROR(server_logger(), action << ": instance_id is required");
@@ -127,7 +135,6 @@ MmsValue* create_value_from_msg(const msgpack::object& obj, DataAttributeType ty
         case IEC61850_VISIBLE_STRING_255:
         case IEC61850_UNICODE_STRING_255: {
             std::string value = ipc::codec::as_string(obj, "");
-            // Use strdup to allocate a copy of the string that persists
             char* str_copy = strdup(value.c_str());
             if (!str_copy) {
                 LOG4CPLUS_ERROR(server_logger(), "Failed to allocate string memory");
@@ -234,7 +241,7 @@ IedModel* build_model_from_dict(const msgpack::object& model_obj, std::string& o
 
 void on_connection_event(IedServer, ClientConnection connection, bool connected, void* param) {
     auto* ctx = static_cast<ServerInstanceContext*>(param);
-    
+
     std::string peer = ClientConnection_getPeerAddress(connection) ? ClientConnection_getPeerAddress(connection) : "unknown";
     std::string id = peer;
     if (connected) {
@@ -341,7 +348,6 @@ void update_attribute_value(IedServer server, DataAttribute* da, const msgpack::
         case IEC61850_VISIBLE_STRING_255:
         case IEC61850_UNICODE_STRING_255: {
             std::string value = ipc::codec::as_string(value_obj, "");
-            // updateVisibleStringAttributeValue makes a copy internally, so this is safe
             char* str_copy = strdup(value.c_str());
             if (str_copy) {
                 IedServer_updateVisibleStringAttributeValue(server, da, str_copy);
@@ -360,38 +366,32 @@ void update_attribute_value(IedServer server, DataAttribute* da, const msgpack::
 
 namespace ipc::actions {
 
-bool handle_server_action(
-    const std::string& action,
-    BackendContext& context,
-    const msgpack::object& payload,
-    bool has_payload,
-    msgpack::packer<msgpack::sbuffer>& pk) {
+class ServerStartAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.start"; }
 
-    if (!has_payload || payload.type != msgpack::type::MAP) {
-        LOG4CPLUS_ERROR(server_logger(), action << " missing payload");
-        pack_error_response(pk, "Missing payload");
-        return true;
-    }
-    
-    if (action == "server.start") {
-        std::lock_guard<std::mutex> lock(context.mutex);
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
         if (error_occurred) {
             return true;
         }
-        
+
         LOG4CPLUS_INFO(server_logger(), "server.start requested for instance " << instance_id);
 
-        auto* inst = context.get_server_instance(instance_id);
+        auto* inst = ctx.context.get_server_instance(instance_id);
         if (!inst || !inst->server || !inst->model) {
             LOG4CPLUS_ERROR(server_logger(), "server.start: server not initialized for instance " << instance_id);
             pack_error_response(pk, "Server not initialized. Call server.load_model first");
             return true;
         }
 
-        // 如果已经运行则停止
         if (inst->running) {
             IedServer_stop(inst->server);
             inst->running = false;
@@ -399,9 +399,8 @@ bool handle_server_action(
 
         int port = inst->port;
         std::string ip_address = inst->ip_address;
-        
-        // 检查是否有新的port配置
-        auto config_obj = ipc::codec::find_key(payload, "config");
+
+        auto config_obj = ipc::codec::find_key(ctx.payload, "config");
         if (config_obj && config_obj->type == msgpack::type::MAP) {
             if (auto port_obj = ipc::codec::find_key(*config_obj, "port")) {
                 port = static_cast<int>(ipc::codec::as_int64(*port_obj, inst->port));
@@ -415,24 +414,23 @@ bool handle_server_action(
                 }
             }
         }
-        
-        // 如果IP需要配置且指定了全局网卡，则配置IP地址
-        if (network::should_configure_ip(ip_address) && !context.global_interface_name.empty()) {
-            std::string label = context.global_interface_name + ":iec" + instance_id;
-            if (network::add_ip_address(context.global_interface_name, ip_address, context.global_prefix_len, label)) {
+
+        if (network::should_configure_ip(ip_address) && !ctx.context.global_interface_name.empty()) {
+            std::string label = ctx.context.global_interface_name + ":iec" + instance_id;
+            if (network::add_ip_address(ctx.context.global_interface_name, ip_address, ctx.context.global_prefix_len, label)) {
                 inst->ip_configured = true;
-                LOG4CPLUS_INFO(server_logger(), "Configured IP " << ip_address << " on " << context.global_interface_name);
+                LOG4CPLUS_INFO(server_logger(), "Configured IP " << ip_address << " on " << ctx.context.global_interface_name);
             } else {
-                LOG4CPLUS_WARN(server_logger(), "Failed to configure IP " << ip_address << " on " << context.global_interface_name);
+                LOG4CPLUS_WARN(server_logger(), "Failed to configure IP " << ip_address << " on " << ctx.context.global_interface_name);
             }
         }
-        
+
         LOG4CPLUS_INFO(server_logger(), "Starting server instance " << instance_id << " on " << ip_address << ":" << port);
         IedServer_start(inst->server, port);
         inst->running = true;
-        
+
         LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port);
-        
+
         pk.pack("payload");
         pk.pack_map(2);
         pk.pack("success");
@@ -443,19 +441,28 @@ bool handle_server_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    if (action == "server.stop") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
+class ServerStopAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.stop"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
         if (error_occurred) {
             return true;
         }
-        
+
         LOG4CPLUS_INFO(server_logger(), "server.stop requested for instance " << instance_id);
 
-        auto* inst = context.get_server_instance(instance_id);
+        auto* inst = ctx.context.get_server_instance(instance_id);
         if (inst && inst->server && inst->running) {
             IedServer_stop(inst->server);
             inst->running = false;
@@ -468,28 +475,35 @@ bool handle_server_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    if (action == "server.remove") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
+class ServerRemoveAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.remove"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
         if (error_occurred) {
             return true;
         }
-        
+
         LOG4CPLUS_INFO(server_logger(), "server.remove requested for instance " << instance_id);
 
-        auto* inst = context.get_server_instance(instance_id);
+        auto* inst = ctx.context.get_server_instance(instance_id);
         if (inst) {
-            // 先清理IP配置
-            if (inst->ip_configured && !context.global_interface_name.empty()) {
-                network::remove_ip_address(context.global_interface_name, inst->ip_address, context.global_prefix_len);
+            if (inst->ip_configured && !ctx.context.global_interface_name.empty()) {
+                network::remove_ip_address(ctx.context.global_interface_name, inst->ip_address, ctx.context.global_prefix_len);
                 inst->ip_configured = false;
-                LOG4CPLUS_INFO(server_logger(), "Cleaned up IP " << inst->ip_address << " from " << context.global_interface_name);
+                LOG4CPLUS_INFO(server_logger(), "Cleaned up IP " << inst->ip_address << " from " << ctx.context.global_interface_name);
             }
-            
-            // 停止服务
+
             if (inst->server) {
                 if (inst->running) {
                     IedServer_stop(inst->server);
@@ -498,19 +512,16 @@ bool handle_server_action(
                 IedServer_destroy(inst->server);
                 inst->server = nullptr;
             }
-            // 释放配置
             if (inst->config) {
                 IedServerConfig_destroy(inst->config);
                 inst->config = nullptr;
             }
-            // 释放模型
             if (inst->model) {
                 IedModel_destroy(inst->model);
                 inst->model = nullptr;
             }
             inst->clients.clear();
-            // 从上下文中删除实例
-            context.remove_server_instance(instance_id);
+            ctx.context.remove_server_instance(instance_id);
             LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " removed");
         }
 
@@ -520,31 +531,38 @@ bool handle_server_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    if (action == "server.load_model") {
-        std::lock_guard<std::mutex> lock(context.mutex);
+class ServerLoadModelAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.load_model"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
         if (error_occurred) {
             return true;
         }
-        
+
         LOG4CPLUS_INFO(server_logger(), "server.load_model requested for instance " << instance_id);
 
-        auto model_obj = ipc::codec::find_key(payload, "model");
-        auto config_obj = ipc::codec::find_key(payload, "config");
-        
+        auto model_obj = ipc::codec::find_key(ctx.payload, "model");
+        auto config_obj = ipc::codec::find_key(ctx.payload, "config");
+
         if (!model_obj) {
             LOG4CPLUS_ERROR(server_logger(), "server.load_model: model is required for instance " << instance_id);
             pack_error_response(pk, "model payload is required");
             return true;
         }
 
-        // 获取或创建实例
-        auto* inst = context.get_or_create_server_instance(instance_id);
-        
-        // 清理旧资源
+        auto* inst = ctx.context.get_or_create_server_instance(instance_id);
+
         if (inst->server) {
             IedServer_stop(inst->server);
             IedServer_destroy(inst->server);
@@ -558,18 +576,15 @@ bool handle_server_action(
             IedModel_destroy(inst->model);
             inst->model = nullptr;
         }
-        
-        // 构建model
+
         inst->model = build_model_from_dict(*model_obj, inst->ied_name);
-        
-        // 创建配置
+
         inst->config = IedServerConfig_create();
-        
-        // 从config中读取参数
+
         int max_conn = 10;
         int port = 102;
         std::string ip_address = "0.0.0.0";
-        
+
         if (config_obj && config_obj->type == msgpack::type::MAP) {
             if (auto max_conn_obj = ipc::codec::find_key(*config_obj, "max_connections")) {
                 max_conn = static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10));
@@ -584,24 +599,22 @@ bool handle_server_action(
                 LOG4CPLUS_DEBUG(server_logger(), "ip_address set to " << ip_address);
             }
         }
-        
+
         IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
-        
-        // 创建IedServer
+
         inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
         IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
-        
-        // 设置本地 IP 地址
+
         if (ip_address != "0.0.0.0") {
             IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
             LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " configured IP: " << ip_address);
         }
-        
+
         inst->port = port;
         inst->ip_address = ip_address;
-        
+
         LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " loaded model (" << inst->ied_name << "), ready to start on " << ip_address << ":" << port);
-        
+
         pk.pack("payload");
         pk.pack_map(2);
         pk.pack("success");
@@ -612,20 +625,29 @@ bool handle_server_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    if (action == "server.set_data_value") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
+class ServerSetDataValueAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.set_data_value"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
         if (error_occurred) {
             return true;
         }
-        
-        auto ref_obj = ipc::codec::find_key(payload, "reference");
-        auto value_obj = ipc::codec::find_key(payload, "value");
-        
-        auto* inst = context.get_server_instance(instance_id);
+
+        auto ref_obj = ipc::codec::find_key(ctx.payload, "reference");
+        auto value_obj = ipc::codec::find_key(ctx.payload, "value");
+
+        auto* inst = ctx.context.get_server_instance(instance_id);
         if (!inst || !inst->server || !inst->model || !ref_obj || !value_obj) {
             LOG4CPLUS_ERROR(server_logger(), "server.set_data_value invalid request for instance " << instance_id);
             pack_error_response(pk, "Invalid request: missing server, model, reference, or value");
@@ -648,19 +670,28 @@ bool handle_server_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    if (action == "server.get_values") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
+class ServerGetValuesAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.get_values"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
         if (error_occurred) {
             return true;
         }
-        
-        auto refs_obj = ipc::codec::find_key(payload, "references");
-        
-        auto* inst = context.get_server_instance(instance_id);
+
+        auto refs_obj = ipc::codec::find_key(ctx.payload, "references");
+
+        auto* inst = ctx.context.get_server_instance(instance_id);
         if (!inst || !inst->server || !inst->model || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
             LOG4CPLUS_ERROR(server_logger(), "server.get_values invalid request for instance " << instance_id);
             pack_error_response(pk, "Invalid request: missing server, model, or references array");
@@ -693,20 +724,29 @@ bool handle_server_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    if (action == "server.get_clients") {
-        std::lock_guard<std::mutex> lock(context.mutex);
-        
+class ServerGetClientsAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.get_clients"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(payload, action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
         if (error_occurred) {
             return true;
         }
-        
+
         LOG4CPLUS_DEBUG(server_logger(), "server.get_clients requested for instance " << instance_id);
-        
-        auto* inst = context.get_server_instance(instance_id);
-        
+
+        auto* inst = ctx.context.get_server_instance(instance_id);
+
         pk.pack("payload");
         pk.pack_map(1);
         pk.pack("clients");
@@ -726,17 +766,28 @@ bool handle_server_action(
         pk.pack_nil();
         return true;
     }
-    
-    if (action == "server.list_instances") {
-        std::lock_guard<std::mutex> lock(context.mutex);
+};
+
+class ServerListInstancesAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.list_instances"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
         LOG4CPLUS_DEBUG(server_logger(), "server.list_instances requested");
-        
+
         pk.pack("payload");
         pk.pack_map(1);
         pk.pack("instances");
-        pk.pack_array(context.server_instances.size());
-        
-        for (const auto& [id, inst] : context.server_instances) {
+        pk.pack_array(ctx.context.server_instances.size());
+
+        for (const auto& entry : ctx.context.server_instances) {
+            const auto& id = entry.first;
+            const auto& inst = entry.second;
             pk.pack_map(4);
             pk.pack("instance_id");
             pk.pack(id);
@@ -747,23 +798,32 @@ bool handle_server_action(
             pk.pack("ied_name");
             pk.pack(inst->ied_name);
         }
-        
+
         pk.pack("error");
         pk.pack_nil();
         return true;
     }
-    
-    if (action == "server.get_interfaces") {
-        std::lock_guard<std::mutex> lock(context.mutex);
+};
+
+class ServerGetInterfacesAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.get_interfaces"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
         LOG4CPLUS_INFO(server_logger(), "server.get_interfaces requested");
-        
+
         auto interfaces = network::get_network_interfaces();
-        
+
         pk.pack("payload");
         pk.pack_map(2);
         pk.pack("interfaces");
         pk.pack_array(interfaces.size());
-        
+
         for (const auto& iface : interfaces) {
             pk.pack_map(4);
             pk.pack("name");
@@ -778,47 +838,55 @@ bool handle_server_action(
                 pk.pack(addr);
             }
         }
-        
-        // 返回当前配置的网卡
+
         pk.pack("current_interface");
-        if (context.global_interface_name.empty()) {
+        if (ctx.context.global_interface_name.empty()) {
             pk.pack_nil();
         } else {
             pk.pack_map(2);
             pk.pack("name");
-            pk.pack(context.global_interface_name);
+            pk.pack(ctx.context.global_interface_name);
             pk.pack("prefix_len");
-            pk.pack(context.global_prefix_len);
+            pk.pack(ctx.context.global_prefix_len);
         }
-        
+
         pk.pack("error");
         pk.pack_nil();
         return true;
     }
-    
-    if (action == "server.set_interface") {
-        std::lock_guard<std::mutex> lock(context.mutex);
+};
+
+class ServerSetInterfaceAction final : public ActionHandler {
+public:
+    const char* name() const override { return "server.set_interface"; }
+
+    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+        if (!ensure_payload_map(ctx, pk)) {
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(ctx.context.mutex);
         LOG4CPLUS_INFO(server_logger(), "server.set_interface requested");
-        
-        auto iface_obj = ipc::codec::find_key(payload, "interface_name");
+
+        auto iface_obj = ipc::codec::find_key(ctx.payload, "interface_name");
         if (!iface_obj) {
             LOG4CPLUS_ERROR(server_logger(), "server.set_interface: interface_name is required");
             pack_error_response(pk, "interface_name is required");
             return true;
         }
-        
+
         std::string interface_name = ipc::codec::as_string(*iface_obj, "");
         int prefix_len = 24;
-        
-        if (auto prefix_obj = ipc::codec::find_key(payload, "prefix_len")) {
+
+        if (auto prefix_obj = ipc::codec::find_key(ctx.payload, "prefix_len")) {
             prefix_len = static_cast<int>(ipc::codec::as_int64(*prefix_obj, 24));
         }
-        
-        context.global_interface_name = interface_name;
-        context.global_prefix_len = prefix_len;
-        
+
+        ctx.context.global_interface_name = interface_name;
+        ctx.context.global_prefix_len = prefix_len;
+
         LOG4CPLUS_INFO(server_logger(), "Global interface set to: " << interface_name << " (prefix_len: " << prefix_len << ")");
-        
+
         pk.pack("payload");
         pk.pack_map(2);
         pk.pack("interface_name");
@@ -829,8 +897,19 @@ bool handle_server_action(
         pk.pack_nil();
         return true;
     }
+};
 
-    return false;
+void register_server_actions(ActionRegistry& registry) {
+    registry.add(std::make_unique<ServerStartAction>());
+    registry.add(std::make_unique<ServerStopAction>());
+    registry.add(std::make_unique<ServerRemoveAction>());
+    registry.add(std::make_unique<ServerLoadModelAction>());
+    registry.add(std::make_unique<ServerSetDataValueAction>());
+    registry.add(std::make_unique<ServerGetValuesAction>());
+    registry.add(std::make_unique<ServerGetClientsAction>());
+    registry.add(std::make_unique<ServerListInstancesAction>());
+    registry.add(std::make_unique<ServerGetInterfacesAction>());
+    registry.add(std::make_unique<ServerSetInterfaceAction>());
 }
 
 } // namespace ipc::actions

@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "action_server.hpp"
+#include "action/action.hpp"
 #include "logger.hpp"
 #include "msgpack_codec.hpp"
 #include "test_helpers.hpp"
@@ -30,19 +30,22 @@ msgpack::object_handle execute_action(
     const msgpack::object& payload,
     bool has_payload,
     msgpack::object& out_response) {
-    msgpack::sbuffer buffer;
-    msgpack::packer<msgpack::sbuffer> pk(&buffer);
+    msgpack::sbuffer request_buffer;
+    msgpack::packer<msgpack::sbuffer> pk(&request_buffer);
 
-    pk.pack_map(4);
+    pk.pack_map(has_payload ? 3 : 2);
     pk.pack("id");
     pk.pack("test-id");
-    pk.pack("type");
-    pk.pack("response");
+    pk.pack("action");
+    pk.pack(action);
+    if (has_payload) {
+        pk.pack("payload");
+        pk.pack(payload);
+    }
 
-    bool handled = ipc::actions::handle_server_action(action, context, payload, has_payload, pk);
-    EXPECT_TRUE(handled);
-
-    auto response_handle = msgpack::unpack(buffer.data(), buffer.size());
+    std::string request_bytes(request_buffer.data(), request_buffer.size());
+    std::string response_bytes = ipc::actions::handle_action(request_bytes, context);
+    auto response_handle = msgpack::unpack(response_bytes.data(), response_bytes.size());
     out_response = response_handle.get();
     return response_handle;
 }
