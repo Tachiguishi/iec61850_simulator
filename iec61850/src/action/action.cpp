@@ -24,6 +24,48 @@ ActionRegistry& get_registry() {
 
 } // namespace
 
+bool ActionHandler::ensure_payload_map(const ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) {
+	if (!ctx.has_payload || ctx.payload.type != msgpack::type::MAP) {
+		LOG4CPLUS_ERROR(server_logger(), ctx.action << " missing payload");
+		pack_error_response(pk, "Missing payload");
+		return false;
+	}
+	return true;
+}
+
+void ActionHandler::pack_error_response(msgpack::packer<msgpack::sbuffer>& pk, const std::string& error_msg){
+	pk.pack("payload");
+	pk.pack_map(0);
+	pk.pack("error");
+	ipc::codec::pack_error(pk, error_msg);
+}
+
+std::string ActionHandler::validate_and_extract_instance_id(
+    const msgpack::object& payload,
+    const std::string& action,
+    msgpack::packer<msgpack::sbuffer>& pk,
+    bool& error_occurred) {
+    std::string instance_id = extract_instance_id(payload);
+    if (instance_id.empty()) {
+        LOG4CPLUS_ERROR(server_logger(), action << ": instance_id is required");
+        pack_error_response(pk, "instance_id is required");
+        error_occurred = true;
+        return "";
+    }
+    error_occurred = false;
+    return instance_id;
+}
+
+std::string ActionHandler::extract_instance_id(const msgpack::object& payload) {
+    if (auto id_obj = ipc::codec::find_key(payload, "instance_id")) {
+        std::string id = ipc::codec::as_string(*id_obj, "");
+        if (!id.empty()) {
+            return id;
+        }
+    }
+    return "";
+}
+
 std::string handle_action(const std::string& request_bytes, BackendContext& context) {
 	
 	msgpack::sbuffer buffer;
