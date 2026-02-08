@@ -124,6 +124,48 @@ TEST(ActionServer, LoadDefaultModelReturnsSuccess) {
     EXPECT_EQ(get_error_message(response), "");
 }
 
+TEST(ActionServer, LoadReportModelReturnsSuccess) {
+    BackendContext context;
+
+    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+        pack_payload_from_json_file(pk, "report_goose_ied.json");
+    });
+
+    msgpack::object response;
+    execute_action("server.load_model", context, payload_handle.get(), true, response);
+
+    EXPECT_TRUE(get_success_flag(response));
+    EXPECT_EQ(get_error_message(response), "");
+}
+
+TEST(ActionServer, LoadControlModelReturnsSuccess) {
+    BackendContext context;
+
+    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+        pack_payload_from_json_file(pk, "control_ied.json");
+    });
+
+    msgpack::object response;
+    execute_action("server.load_model", context, payload_handle.get(), true, response);
+
+    EXPECT_TRUE(get_success_flag(response));
+    EXPECT_EQ(get_error_message(response), "");
+}
+
+TEST(ActionServer, LoadSettingGroupModelReturnsSuccess) {
+    BackendContext context;
+
+    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+        pack_payload_from_json_file(pk, "setting_group_ied.json");
+    });
+
+    msgpack::object response;
+    execute_action("server.load_model", context, payload_handle.get(), true, response);
+
+    EXPECT_TRUE(get_success_flag(response));
+    EXPECT_EQ(get_error_message(response), "");
+}
+
 TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
     BackendContext context;
 

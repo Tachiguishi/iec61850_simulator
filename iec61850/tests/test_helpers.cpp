@@ -1,5 +1,10 @@
 #include "test_helpers.hpp"
 
+#include "nlohmann_json.hpp"
+
+#include <fstream>
+#include <stdexcept>
+
 /*
 {
   "instance_id": "default_instance",
@@ -851,4 +856,68 @@ void pack_default_model_payload(msgpack::packer<msgpack::sbuffer>& pk) {
     pk.pack_map(0);
     pk.pack("setting_group_control");
     pk.pack_nil();
+}
+
+void pack_payload_from_json_file(msgpack::packer<msgpack::sbuffer>& pk, const std::string& model_path){
+  // 如果路径是相对路径，则是相对当前执行文件的路径
+  std::filesystem::path exec_path = std::filesystem::current_path();
+  std::filesystem::path json_path = exec_path / model_path;
+  std::ifstream input(json_path);
+  if (!input.is_open()) {
+    throw std::runtime_error("Failed to open JSON file: " + model_path);
+  }
+
+  nlohmann::json payload;
+  input >> payload;
+
+  pk.pack_map(2);
+  pk.pack("instance_id");
+  pk.pack("default_instance");
+  pk.pack("model");
+
+  const auto pack_json = [&pk](const nlohmann::json& value, const auto& self) -> void {
+    if (value.is_null()) {
+      pk.pack_nil();
+      return;
+    }
+    if (value.is_boolean()) {
+      pk.pack(value.get<bool>());
+      return;
+    }
+    if (value.is_number_integer()) {
+      pk.pack(value.get<int64_t>());
+      return;
+    }
+    if (value.is_number_unsigned()) {
+      pk.pack(value.get<uint64_t>());
+      return;
+    }
+    if (value.is_number_float()) {
+      pk.pack(value.get<double>());
+      return;
+    }
+    if (value.is_string()) {
+      pk.pack(value.get<std::string>());
+      return;
+    }
+    if (value.is_array()) {
+      pk.pack_array(value.size());
+      for (const auto& item : value) {
+        self(item, self);
+      }
+      return;
+    }
+    if (value.is_object()) {
+      pk.pack_map(value.size());
+      for (auto it = value.begin(); it != value.end(); ++it) {
+        pk.pack(it.key());
+        self(it.value(), self);
+      }
+      return;
+    }
+
+    throw std::runtime_error("Unsupported JSON value while packing msgpack");
+  };
+
+  pack_json(payload, pack_json);
 }

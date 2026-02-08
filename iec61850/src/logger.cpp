@@ -2,9 +2,6 @@
 
 #include <filesystem>
 
-#include <limits.h>
-#include <unistd.h>
-
 #include <log4cplus/configurator.h>
 #include <log4cplus/helpers/loglog.h>
 
@@ -29,15 +26,9 @@ static std::filesystem::path resolve_config_path(const std::string& config_path)
 		return path;
 	}
 
-	char buffer[PATH_MAX] = {0};
-	ssize_t len = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
-	if (len > 0) {
-		buffer[len] = '\0';
-		std::filesystem::path exe_path(buffer);
-		return exe_path.parent_path() / path;
-	}
-
-	return std::filesystem::absolute(path);
+	std::filesystem::path exe_path = std::filesystem::current_path();
+	std::filesystem::path resolved = exe_path / path;
+	return resolved;
 }
 
 void init_logging(const std::string& config_path) {
