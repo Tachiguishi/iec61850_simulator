@@ -122,8 +122,8 @@ class IEC61850ServerProxy:
             effective_ip = self.config.ip_address
             if self.ied:
                 for ap in self.ied.access_points.values():
-                    if ap.communication_params and ap.communication_params.ip_address:
-                        effective_ip = ap.communication_params.ip_address
+                    if ap.mms_addresses and ap.mms_addresses.ip_address:
+                        effective_ip = ap.mms_addresses.ip_address
                         self._log("info", f"Using IP from SCD: {effective_ip}")
                         break
 

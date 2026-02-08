@@ -209,7 +209,7 @@ class SCDParser:
 					ln.log_controls[log.name] = log
 
 			# 解析 SettingGroupControl
-			sg_elem = self._find_element(ln_elem, 'SettingGroupControl')
+			sg_elem = self._find_element(ln_elem, 'SettingControl')
 			if sg_elem is not None:
 				sg = self._parse_setting_group_control(sg_elem)
 				if sg:
