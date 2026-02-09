@@ -19,6 +19,31 @@
 
 namespace {
 
+std::string now_iso() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    gmtime_r(&tt, &tm);
+    char buffer[32] = {0};
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buffer;
+}
+
+void on_connection_event(IedServer, ClientConnection connection, bool connected, void* param) {
+    auto* ctx = static_cast<ServerInstanceContext*>(param);
+
+    std::string peer = ClientConnection_getPeerAddress(connection) ? ClientConnection_getPeerAddress(connection) : "unknown";
+    std::string id = peer;
+    if (connected) {
+        ctx->clients.push_back({id, now_iso()});
+    } else {
+        ctx->clients.erase(
+            std::remove_if(ctx->clients.begin(), ctx->clients.end(),
+                           [&](const ClientInfo& info) { return info.id == id; }),
+            ctx->clients.end());
+    }
+}
+
 void pack_attribute_value(msgpack::packer<msgpack::sbuffer>& pk, IedServer server, DataAttribute* da) {
     if (!da) {
         pk.pack_map(3);
@@ -151,10 +176,22 @@ public:
         LOG4CPLUS_INFO(server_logger(), "server.start requested for instance " << instance_id);
 
         auto* inst = ctx.context.get_server_instance(instance_id);
-        if (!inst || !inst->server || !inst->model) {
+        if (!inst || !inst->model) {
             LOG4CPLUS_ERROR(server_logger(), "server.start: server not initialized for instance " << instance_id);
             pack_error_response(pk, "Server not initialized. Call server.load_model first");
             return true;
+        }
+
+        if (!inst->config) {
+            inst->config = IedServerConfig_create();
+        }
+
+        if (!inst->server) {
+            inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
+            IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
+            if (inst->ip_address != "0.0.0.0") {
+                IedServer_setLocalIpAddress(inst->server, inst->ip_address.c_str());
+            }
         }
 
         if (inst->running) {

@@ -13,30 +13,6 @@
 namespace ipc::actions {
 
 namespace {
-std::string now_iso() {
-	auto now = std::chrono::system_clock::now();
-	std::time_t tt = std::chrono::system_clock::to_time_t(now);
-	std::tm tm{};
-	gmtime_r(&tt, &tm);
-	char buffer[32] = {0};
-	std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm);
-	return buffer;
-}
-
-void on_connection_event(IedServer, ClientConnection connection, bool connected, void* param) {
-	auto* ctx = static_cast<ServerInstanceContext*>(param);
-
-	std::string peer = ClientConnection_getPeerAddress(connection) ? ClientConnection_getPeerAddress(connection) : "unknown";
-	std::string id = peer;
-	if (connected) {
-		ctx->clients.push_back({id, now_iso()});
-	} else {
-		ctx->clients.erase(
-			std::remove_if(ctx->clients.begin(), ctx->clients.end(),
-						   [&](const ClientInfo& info) { return info.id == id; }),
-			ctx->clients.end());
-	}
-}
 
 FunctionalConstraint map_fc(const std::string& fc) {
 	std::string fc_upper = fc;
@@ -876,14 +852,6 @@ bool ServerLoadModelAction::handle(ActionContext& ctx, msgpack::packer<msgpack::
 		}
 
 		IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
-
-		inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
-		IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
-
-		if (ip_address != "0.0.0.0") {
-			IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
-			LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " configured IP: " << ip_address);
-		}
 
 		inst->port = port;
 		inst->ip_address = ip_address;

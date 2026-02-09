@@ -83,6 +83,25 @@ bool get_success_flag(const msgpack::object& response) {
     return success_obj->via.boolean;
 }
 
+void assert_fcdas(DataSet* data_set, const std::unordered_set<std::string>& expected) {
+    ASSERT_NE(data_set, nullptr);
+    std::unordered_set<std::string> actual;
+    for (auto* entry = DataSet_getFirstEntry(data_set); entry; entry = DataSetEntry_getNext(entry)) {
+        std::string ref = entry->logicalDeviceName ? entry->logicalDeviceName : "";
+        ref += "/";
+        ref += entry->variableName ? entry->variableName : "";
+        if (entry->index >= 0) {
+            ref += "[" + std::to_string(entry->index) + "]";
+        }
+        if (entry->componentName) {
+            ref += ".";
+            ref += entry->componentName;
+        }
+        actual.insert(ref);
+    }
+    EXPECT_EQ(actual, expected);
+}
+
 class LoggingEnvironment final : public ::testing::Environment {
 public:
     void SetUp() override {
@@ -187,10 +206,10 @@ TEST(ActionServer, LoadReportModelReturnsSuccess) {
         "GenericIO/GGIO1.SPCSO4.stVal",
     };
     std::unordered_set<std::string> events2_fcdas = {
-        "GenericIO/GGIO1.SPCSO1.",
-        "GenericIO/GGIO1.SPCSO2.",
-        "GenericIO/GGIO1.SPCSO3.",
-        "GenericIO/GGIO1.SPCSO4.",
+        "GenericIO/GGIO1.SPCSO1",
+        "GenericIO/GGIO1.SPCSO2",
+        "GenericIO/GGIO1.SPCSO3",
+        "GenericIO/GGIO1.SPCSO4",
     };
     std::unordered_set<std::string> events3_fcdas = {
         "GenericIO/GGIO1.SPCSO1.stVal",
@@ -203,28 +222,10 @@ TEST(ActionServer, LoadReportModelReturnsSuccess) {
         "GenericIO/GGIO1.SPCSO4.q",
     };
     std::unordered_set<std::string> analog_fcdas = {
-        "GenericIO/GGIO1.AnIn1.",
-        "GenericIO/GGIO1.AnIn2.",
-        "GenericIO/GGIO1.AnIn3.",
-        "GenericIO/GGIO1.AnIn4.",
-    };
-
-    auto assert_fcdas = [](DataSet* data_set, const std::unordered_set<std::string>& expected) {
-        std::unordered_set<std::string> actual;
-        for (auto* entry = DataSet_getFirstEntry(data_set); entry; entry = DataSetEntry_getNext(entry)) {
-            std::string ref = entry->logicalDeviceName ? entry->logicalDeviceName : "";
-            ref += "/";
-            ref += entry->variableName ? entry->variableName : "";
-            if (entry->index >= 0) {
-                ref += "[" + std::to_string(entry->index) + "]";
-            }
-            if (entry->componentName) {
-                ref += ".";
-                ref += entry->componentName;
-            }
-            actual.insert(ref);
-        }
-        EXPECT_EQ(actual, expected);
+        "GenericIO/GGIO1.AnIn1",
+        "GenericIO/GGIO1.AnIn2",
+        "GenericIO/GGIO1.AnIn3",
+        "GenericIO/GGIO1.AnIn4",
     };
 
     assert_fcdas(LogicalNode_getDataSet(lln0, "Events"), events_fcdas);
@@ -249,6 +250,57 @@ TEST(ActionServer, LoadControlModelReturnsSuccess) {
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
+
+    auto* server = context.get_server_instance("default_instance");
+    ASSERT_NE(server, nullptr);
+    ASSERT_NE(server->model, nullptr);
+
+    auto* logical_device = IedModel_getDeviceByInst(server->model, "GenericIO");
+    ASSERT_NE(logical_device, nullptr);
+
+    auto* lln0 = LogicalDevice_getLogicalNode(logical_device, "LLN0");
+    ASSERT_NE(lln0, nullptr);
+
+    EXPECT_NE(LogicalNode_getDataSet(lln0, "ControlEvents"), nullptr);
+
+    bool has_rcb = false;
+    for (auto* rcb = server->model->rcbs; rcb; rcb = rcb->sibling) {
+        if (rcb->parent == lln0 && rcb->name && std::string(rcb->name) == "ControlEventsRCB") {
+            has_rcb = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(has_rcb);
+
+    bool has_gse = false;
+    for (auto* gse = server->model->gseCBs; gse; gse = gse->sibling) {
+        if (gse->parent == lln0) {
+            has_gse = true;
+            break;
+        }
+    }
+    EXPECT_FALSE(has_gse);
+
+    std::unordered_set<std::string> control_fcdas = {
+        "GenericIO/GGIO1.SPCSO1.stVal",
+        "GenericIO/GGIO1.SPCSO2.stVal",
+        "GenericIO/GGIO1.SPCSO3.stVal",
+        "GenericIO/GGIO1.SPCSO4.stVal",
+        "GenericIO/GGIO1.SPCSO5.stVal",
+        "GenericIO/GGIO1.SPCSO6.stVal",
+        "GenericIO/GGIO1.SPCSO7.stVal",
+        "GenericIO/GGIO1.SPCSO8.stVal",
+        "GenericIO/GGIO1.SPCSO9.stVal",
+        "GenericIO/GGIO1.SPCSO2.stSeld",
+        "GenericIO/GGIO1.SPCSO2.opRcvd",
+        "GenericIO/GGIO1.SPCSO2.opOk",
+    };
+
+    assert_fcdas(LogicalNode_getDataSet(lln0, "ControlEvents"), control_fcdas);
+
+    auto* data_node = IedModel_getModelNodeByShortObjectReference(
+        server->model, "GenericIO/GGIO1.SPCSO2.stSeld");
+    EXPECT_NE(data_node, nullptr);
 }
 
 TEST(ActionServer, LoadSettingGroupModelReturnsSuccess) {
@@ -263,6 +315,41 @@ TEST(ActionServer, LoadSettingGroupModelReturnsSuccess) {
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
+
+    auto* server = context.get_server_instance("default_instance");
+    ASSERT_NE(server, nullptr);
+    ASSERT_NE(server->model, nullptr);
+
+    auto* logical_device = IedModel_getDeviceByInst(server->model, "PROT");
+    ASSERT_NE(logical_device, nullptr);
+
+    auto* lln0 = LogicalDevice_getLogicalNode(logical_device, "LLN0");
+    ASSERT_NE(lln0, nullptr);
+
+    bool has_rcb = false;
+    for (auto* rcb = server->model->rcbs; rcb; rcb = rcb->sibling) {
+        if (rcb->parent == lln0) {
+            has_rcb = true;
+            break;
+        }
+    }
+    EXPECT_FALSE(has_rcb);
+
+    bool has_gse = false;
+    for (auto* gse = server->model->gseCBs; gse; gse = gse->sibling) {
+        if (gse->parent == lln0) {
+            has_gse = true;
+            break;
+        }
+    }
+    EXPECT_FALSE(has_gse);
+
+    EXPECT_EQ(LogicalNode_getDataSet(lln0, "SettingGroup"), nullptr);
+    EXPECT_NE(LogicalDevice_getSettingGroupControlBlock(logical_device), nullptr);
+
+    auto* data_node = IedModel_getModelNodeByShortObjectReference(
+        server->model, "PROT/LLN0.Mod.stVal");
+    EXPECT_NE(data_node, nullptr);
 }
 
 TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {

@@ -513,7 +513,10 @@ class DataSet(IEC61850Element):
 			ln_inst = fcda.get("lnInst", "")
 			do_name = fcda.get("doName", "")
 			da_name = fcda.get("daName", "")
-			ref = f"{ld_inst}/{prefix}{ln_class}{ln_inst}.{do_name}.{da_name}"
+			if da_name:
+				ref = f"{ld_inst}/{prefix}{ln_class}{ln_inst}.{do_name}.{da_name}"
+			else:
+				ref = f"{ld_inst}/{prefix}{ln_class}{ln_inst}.{do_name}"
 			references.append(ref)
 		return references
 	
