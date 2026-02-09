@@ -112,6 +112,13 @@ public:
 
 ::testing::Environment* const kLoggingEnvironment = ::testing::AddGlobalTestEnvironment(new LoggingEnvironment());
 
+class ActionServerSharedContextTest : public ::testing::Test {
+protected:
+    static BackendContext context;
+};
+
+BackendContext ActionServerSharedContextTest::context;
+
 } // namespace
 
 TEST(ActionServer, StartMissingPayloadReturnsError) {
@@ -134,8 +141,7 @@ TEST(ActionServer, LoadModelMissingPayloadReturnsError) {
     EXPECT_EQ(get_error_message(response), "Missing payload");
 }
 
-TEST(ActionServer, LoadDefaultModelReturnsSuccess) {
-    BackendContext context;
+TEST_F(ActionServerSharedContextTest, LoadDefaultModelReturnsSuccess) {
 
     auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
       pack_default_model_payload(pk);
@@ -148,8 +154,7 @@ TEST(ActionServer, LoadDefaultModelReturnsSuccess) {
     EXPECT_EQ(get_error_message(response), "");
 }
 
-TEST(ActionServer, LoadReportModelReturnsSuccess) {
-    BackendContext context;
+TEST_F(ActionServerSharedContextTest, LoadReportModelReturnsSuccess) {
 
     auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
         pack_payload_from_json_file(pk, "report_goose_ied.json");
@@ -238,8 +243,7 @@ TEST(ActionServer, LoadReportModelReturnsSuccess) {
     EXPECT_NE(data_node, nullptr);
 }
 
-TEST(ActionServer, LoadControlModelReturnsSuccess) {
-    BackendContext context;
+TEST_F(ActionServerSharedContextTest, LoadControlModelReturnsSuccess) {
 
     auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
         pack_payload_from_json_file(pk, "control_ied.json");
@@ -303,8 +307,7 @@ TEST(ActionServer, LoadControlModelReturnsSuccess) {
     EXPECT_NE(data_node, nullptr);
 }
 
-TEST(ActionServer, LoadSettingGroupModelReturnsSuccess) {
-    BackendContext context;
+TEST_F(ActionServerSharedContextTest, LoadSettingGroupModelReturnsSuccess) {
 
     auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
         pack_payload_from_json_file(pk, "setting_group_ied.json");
@@ -409,4 +412,34 @@ TEST(ActionServer, GetClientsReturnsPayload) {
     ASSERT_TRUE(clients_obj);
     ASSERT_EQ(clients_obj->type, msgpack::type::ARRAY);
     EXPECT_EQ(clients_obj->via.array.size, 1u);
+}
+
+TEST(ActionServer, LoadModelAndStartServerReturnsSuccess) {
+    BackendContext context;
+
+    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+        pack_payload_from_json_file(pk, "report_goose_ied.json");
+    });
+
+    msgpack::object response;
+    execute_action("server.load_model", context, payload_handle.get(), true, response);
+
+    EXPECT_TRUE(get_success_flag(response));
+    EXPECT_EQ(get_error_message(response), "");
+
+    auto start_payload = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+        pk.pack_map(1);
+        pk.pack("instance_id");
+        pk.pack("default_instance");
+    });
+
+    execute_action("server.start", context, start_payload.get(), true, response);
+
+    EXPECT_TRUE(get_success_flag(response));
+    EXPECT_EQ(get_error_message(response), "");
+
+    // 检测服务器状态
+    auto* server = context.get_server_instance("default_instance");
+    ASSERT_NE(server, nullptr);
+    EXPECT_TRUE(server->running);
 }

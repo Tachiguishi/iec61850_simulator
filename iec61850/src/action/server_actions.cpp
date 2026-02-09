@@ -229,14 +229,18 @@ public:
 
         LOG4CPLUS_INFO(server_logger(), "Starting server instance " << instance_id << " on " << ip_address << ":" << port);
         IedServer_start(inst->server, port);
-        inst->running = true;
+        inst->running = IedServer_isRunning(inst->server);
 
         LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port);
 
         pk.pack("payload");
         pk.pack_map(2);
         pk.pack("success");
-        pk.pack(true);
+        if (inst->running) {
+            pk.pack(true);
+        } else {
+            pk.pack(false);
+        }
         pk.pack("instance_id");
         pk.pack(instance_id);
         pk.pack("error");
