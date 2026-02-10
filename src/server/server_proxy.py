@@ -5,15 +5,12 @@ IEC61850 server proxy communicating with C++ backend via UDS.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from enum import Enum, auto
 from typing import Any, Callable, Dict, List, Optional
-from urllib import response
 
 from loguru import logger
 
 from core.data_model import IED
-from core.data_model_manager import DataModelManager
 from ipc.uds_client import IPCError, UDSMessageClient
 
 class ServerState(Enum):
@@ -51,8 +48,7 @@ class ServerConfig:
 
 class IEC61850ServerProxy:
     """
-    Server proxy for GUI. Keeps a local IED model for UI display,
-    while delegating IEC61850 networking to C++ backend via IPC.
+    Server proxy for GUI, delegating IEC61850 networking to C++ backend via IPC.
     
     单例模式：确保全局只有一个服务器代理实例，避免重复连接。
     """
@@ -74,9 +70,6 @@ class IEC61850ServerProxy:
         self.config = config or ServerConfig()
         self.state = ServerState.STOPPED
         self.instance_id: Optional[str] = None  # 实例ID，用于多实例支持
-
-        self.data_model_manager = DataModelManager()
-        self.ied: Optional[IED] = None
 
         # 将毫秒转换为秒传递给 UDSMessageClient
         self._ipc = UDSMessageClient(socket_path or "/tmp/iec61850_simulator.sock", timeout_ms / 1000.0)
@@ -108,20 +101,21 @@ class IEC61850ServerProxy:
     # Lifecycle
     # =====================================================================
 
-    def start(self) -> bool:
+    def start(self, ied: Optional[IED] = None) -> bool:
         if self.state == ServerState.RUNNING:
             self._log("warning", "Server already running")
             return False
 
-        if not self.ied:
-            self.ied = self.data_model_manager.create_default_ied()
+        if not ied:
+            self._log("error", "Start failed: no IED model provided")
+            return False
 
         self._set_state(ServerState.STARTING)
         try:
             # 从 IED 通信参数中获取 IP 地址，如果有的话覆盖配置
             effective_ip = self.config.ip_address
-            if self.ied:
-                for ap in self.ied.access_points.values():
+            if ied:
+                for ap in ied.access_points.values():
                     if ap.mms_addresses and ap.mms_addresses.ip_address:
                         effective_ip = ap.mms_addresses.ip_address
                         self._log("info", f"Using IP from SCD: {effective_ip}")
@@ -130,7 +124,7 @@ class IEC61850ServerProxy:
             payload = {
                 "instance_id": self.instance_id,
                 "config": asdict(self.config),
-                "model": self.ied.to_dict() if self.ied else {},
+                "model": ied.to_dict() if ied else {},
             }
             # 如果从 SCD 获取到 IP，覆盖 config 中的 ip_address
             if effective_ip != self.config.ip_address:
@@ -165,7 +159,6 @@ class IEC61850ServerProxy:
     # =====================================================================
 
     def load_model(self, ied: IED) -> None:
-        self.ied = ied
         try:
             response = self._ipc.request("server.load_model", {"instance_id": self.instance_id, "model": ied.to_dict()})
             if not response.data.get("success", False):
@@ -176,12 +169,6 @@ class IEC61850ServerProxy:
 
     def set_data_value(self, reference: str, value: Any) -> None:
         old_value = None
-        if self.ied:
-            da = self.ied.get_data_attribute(reference)
-            if da:
-                old_value = da.value
-                da.value = value
-                da.timestamp = datetime.now()
         try:
             response = self._ipc.request("server.set_data_value", {"instance_id": self.instance_id, "reference": reference, "value": value})
             if not response.data.get("success", False):

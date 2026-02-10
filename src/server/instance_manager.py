@@ -30,15 +30,13 @@ class ServerInstance:
     name: str
     config: ServerConfig
     proxy: IEC61850ServerProxy
+    ied: Optional[IED] = None
+    scl_file_path: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
     
     @property
     def state(self) -> ServerState:
         return self.proxy.state
-    
-    @property
-    def ied(self) -> Optional[IED]:
-        return self.proxy.ied
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -209,8 +207,12 @@ class ServerInstanceManager:
         if not instance:
             self._log(instance_id, "error", f"实例 {instance_id} 不存在")
             return False
-        
-        return instance.proxy.start()
+
+        if not instance.ied:
+            self._log(instance_id, "error", "实例未加载IED模型")
+            return False
+
+        return instance.proxy.start(instance.ied)
     
     def stop_instance(self, instance_id: str) -> bool:
         """停止指定实例"""
@@ -231,7 +233,7 @@ class ServerInstanceManager:
         instance = self._instances.get(instance_id)
         if not instance:
             return False
-        
+        instance.ied = ied
         instance.proxy.load_model(ied)
         return True
     
@@ -276,13 +278,15 @@ class ServerInstanceManager:
         instance = self.create_instance(name, config)
         
         if ied:
+            instance.ied = ied
             instance.proxy.load_model(ied)
         else:
             # 创建默认模型
             dm = DataModelManager()
-            instance.proxy.ied = dm.create_default_ied()
+            instance.ied = dm.create_default_ied()
+            instance.proxy.load_model(instance.ied)
         
-        if instance.proxy.start():
+        if instance.proxy.start(instance.ied):
             return instance
         else:
             self.remove_instance(instance.id)
@@ -344,8 +348,9 @@ class ServerInstanceManager:
                 )
                 
                 # 加载IED模型
+                instance.ied = ied
+                instance.scl_file_path = str(scd_path)
                 instance.proxy.load_model(ied)
-                instance.proxy.scl_file_path = str(scd_path)
                 
                 if auto_start:
                     self.start_instance(instance.id)
@@ -416,8 +421,8 @@ class ServerInstanceManager:
                     "created_at": instance.created_at.isoformat(),
                 }
                 # 保存IED配置路径（如果有）
-                if instance.ied and hasattr(instance.proxy, 'scl_file_path'):
-                    instance_data["scl_file"] = instance.proxy.scl_file_path
+                if instance.ied and instance.scl_file_path:
+                    instance_data["scl_file"] = instance.scl_file_path
                 instances_data.append(instance_data)
             
             data = {
@@ -490,8 +495,9 @@ class ServerInstanceManager:
                         dm = DataModelManager()
                         ied = dm.load_from_scl(scl_file)
                         if ied:
+                            instance.ied = ied
+                            instance.scl_file_path = scl_file
                             instance.proxy.load_model(ied)
-                            instance.proxy.scl_file_path = scl_file
                     
                     if auto_start:
                         self.start_instance(instance.id)

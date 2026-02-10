@@ -125,19 +125,10 @@ class MultiServerPanel(QWidget):
     def _on_create_instance(self, config: Dict):
         """创建实例"""
         try:
-            server_config = ServerConfig(
-                ip_address=config.get("ip_address", "0.0.0.0"),
-                port=config.get("port", 102),
-                max_connections=config.get("max_connections", 10),
-            )
-            
-            instance = self.instance_manager.create_instance(
-                name=config.get("name", "Server"),
-                config=server_config,
-            )
-            
-            # 创建对应的面板
-            self._create_instance_panel(instance)
+            scl_file_path = config.get("scl_file_path")
+            if scl_file_path:
+                self._import_from_scd_file(scl_file_path)
+                return
             
         except ValueError as e:
             QMessageBox.warning(self, "创建失败", str(e))
@@ -173,6 +164,9 @@ class MultiServerPanel(QWidget):
         panel = self._instance_panels.get(instance_id)
         if panel:
             self.detail_stack.setCurrentWidget(panel)
+            instance = self.instance_manager.get_instance(instance_id)
+            if instance:
+                panel.set_ied(instance.ied)
     
     # =========================================================================
     # 实例管理器回调
@@ -242,6 +236,8 @@ class MultiServerPanel(QWidget):
         
         panel = ServerPanel(instance_config, self)
         panel.server = instance.proxy
+        panel.set_ied(instance.ied)
+        panel.model_loaded.connect(lambda ied, iid=instance.id: self._on_model_loaded(iid, ied))
         panel.log_message.connect(
             lambda level, msg, iid=instance.id: self._on_instance_log(iid, level, msg)
         )
@@ -251,6 +247,12 @@ class MultiServerPanel(QWidget):
         
         # 自动选中新创建的实例
         self.instance_list.select_instance(instance.id)
+
+    def _on_model_loaded(self, instance_id: str, ied) -> None:
+        """同步面板加载的IED到实例缓存"""
+        instance = self.instance_manager.get_instance(instance_id)
+        if instance:
+            instance.ied = ied
     
     def _update_stats(self):
         """更新统计信息"""
@@ -317,34 +319,16 @@ class MultiServerPanel(QWidget):
             if instance.id not in self._instance_panels:
                 self._create_instance_panel(instance)
         return count
-    
-    def import_from_scd(self, base_port: int = 102, auto_start: bool = False) -> int:
-        """
-        打开文件对话框导入SCD文件中的IED
-        
-        Args:
-            base_port: 起始端口号
-            auto_start: 是否自动启动导入的实例
-        
-        Returns:
-            导入的实例数量
-        """
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择SCD文件",
-            "",
-            "SCD Files (*.scd *.icd *.cid);;XML Files (*.xml);;All Files (*)"
-        )
-        
-        if not file_path:
-            return 0
-        
+
+
+    def _import_from_scd_file(self, file_path: str, base_port: int = 102, auto_start: bool = False) -> int:
+        """从SCD/CID文件导入IED并创建实例"""
         instances = self.instance_manager.import_from_scd(file_path, base_port, auto_start)
-        
+
         # 为导入的实例创建面板
         for instance in instances:
             self._create_instance_panel(instance)
-        
+
         if instances:
             QMessageBox.information(
                 self,
@@ -357,5 +341,5 @@ class MultiServerPanel(QWidget):
                 "导入失败",
                 "未能从SCD文件导入任何IED"
             )
-        
+
         return len(instances)

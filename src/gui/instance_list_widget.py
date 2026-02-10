@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QPushButton, QLabel, QDialog, QLineEdit, QSpinBox, QFormLayout,
-    QDialogButtonBox, QMenu, QFrame, QToolButton, QSizePolicy
+    QDialogButtonBox, QMenu, QFrame, QToolButton, QSizePolicy, QFileDialog
 )
 from PyQt6.QtGui import QIcon, QAction, QColor
 
@@ -281,6 +281,18 @@ class InstanceListWidget(QWidget):
     
     def _on_add_clicked(self):
         """添加按钮点击"""
+        if self.instance_type == "server":
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "选择CID/SCD文件",
+                "",
+                "SCD Files (*.scd *.icd *.cid);;All Files (*)"
+            )
+            if not file_path:
+                return
+            self.instance_created.emit({"scl_file_path": file_path})
+            return
+
         dialog = InstanceCreateDialog(self.instance_type, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             config = dialog.get_config()

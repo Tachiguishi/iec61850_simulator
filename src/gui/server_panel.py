@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gui.data_tree_widget import DataTreeWidget
 from server.server_proxy import IEC61850ServerProxy, ServerConfig, ServerState
+from core.data_model import IED
 from core.data_model_manager import DataModelManager
 
 # UI文件路径
@@ -43,12 +44,14 @@ class ServerPanel(QWidget):
     """
     
     log_message = pyqtSignal(str, str)  # level, message
+    model_loaded = pyqtSignal(object)  # IED
     
     def __init__(self, config: Dict, parent: Optional[QWidget] = None):
         super().__init__(parent)
         
         self.config = config
         self.server: Optional[IEC61850ServerProxy] = None
+        self._ied: Optional[IED] = None
         self.data_model_manager = DataModelManager()
         
         # 加载UI文件
@@ -168,10 +171,10 @@ class ServerPanel(QWidget):
         self.server.config.enable_reporting = self.reportingCheck.isChecked()
         
         # 确保有IED
-        if not self.server.ied:
+        if not self._ied:
             self._create_default_model()
-        
-        if self.server.start():
+
+        if self.server.start(self._ied):
             self.startBtn.setEnabled(False)
             self.stopBtn.setEnabled(True)
             self._disable_config_inputs(True)
@@ -210,6 +213,7 @@ class ServerPanel(QWidget):
         """创建默认数据模型"""
         name = "SimulatedIED"
         ied = self.data_model_manager.create_default_ied(name)
+        self._ied = ied
         
         if self.server:
             self.server.load_model(ied)
@@ -217,6 +221,7 @@ class ServerPanel(QWidget):
         self._update_data_tree()
         self.modelInfoLabel.setText(f"已加载: {name}")
         self.log_message.emit("info", f"已创建默认IED: {name}")
+        self.model_loaded.emit(ied)
     
     def _load_data_model(self):
         """加载数据模型"""
@@ -231,19 +236,30 @@ class ServerPanel(QWidget):
                 try:
                     if self.server:
                         self.server.load_model(ieds[1])
+                    self._ied = ieds[1]
                     self.modelInfoLabel.setText(f"已加载: {ieds[1].name}")
                     self._update_data_tree()
                     self.log_message.emit("info", f"已加载IED: {ieds[1].name}")
+                    self.model_loaded.emit(ieds[1])
                 except Exception as e:
                     QMessageBox.critical(self, "错误", f"加载数据模型失败: {e}")
             else:
                 QMessageBox.critical(self, "错误", "解析数据模型失败")
     
     def _update_data_tree(self):
-        self._update_dataset_list()
         """更新数据树"""
-        if self.server and self.server.ied:
-            self.data_tree.load_ied(self.server.ied.to_dict())
+        self._update_dataset_list()
+        if self._ied:
+            self.data_tree.load_ied(self._ied.to_dict())
+
+    def set_ied(self, ied: Optional[IED]) -> None:
+        """设置当前IED并刷新模型显示"""
+        self._ied = ied
+        if ied:
+            self.modelInfoLabel.setText(f"已加载: {ied.name}")
+        else:
+            self.modelInfoLabel.setText("未加载模型")
+        self._update_data_tree()
     
     # ========================================================================
     # 仿真
@@ -267,6 +283,11 @@ class ServerPanel(QWidget):
     
     def _on_value_changed(self, reference: str, value):
         """处理树形控件的值变化"""
+        if self._ied:
+            da = self._ied.get_data_attribute(reference)
+            if da:
+                da.value = value
+                da.timestamp = datetime.now()
         if self.server:
             self.server.set_data_value(reference, value)
     
@@ -284,10 +305,10 @@ class ServerPanel(QWidget):
     
     def _refresh_data_view(self):
         """刷新数据视图"""
-        if not self.server or not self.server.ied:
+        if not self.server or not self._ied:
             return
         
-        references = self.server.ied.get_all_references()
+        references = self._ied.get_all_references()
         values = self.server.get_values(references)
         if values:
             self.data_tree.update_values(values)
@@ -334,16 +355,16 @@ class ServerPanel(QWidget):
         """更新数据集列表"""
         self.datasetList.clear()
         
-        if not self.server or not self.server.ied:
+        if not self._ied:
             return
         
         # 遍历所有访问点、逻辑设备、逻辑节点，收集所有数据集
-        for ap_name, ap in self.server.ied.access_points.items():
+        for ap_name, ap in self._ied.access_points.items():
             for ld_name, ld in ap.logical_devices.items():
                 for ln_name, ln in ld.logical_nodes.items():
                     for ds_name, ds in ln.data_sets.items():
                         # 构建完整路径
-                        full_path = f"{self.server.ied.name}{ld_name}/{ln_name}.{ds_name}"
+                        full_path = f"{self._ied.name}{ld_name}/{ln_name}.{ds_name}"
                         item_text = f"{ln_name}.{ds_name} ({len(ds.fcdas)} FCDAs)"
                         
                         # 添加到列表，数据存储完整信息
@@ -396,12 +417,12 @@ class ServerPanel(QWidget):
     
     def _display_control_blocks(self, data):
         """显示关联的控制块（以属性-值格式显示）"""
-        if not self.server or not self.server.ied:
+        if not self._ied:
             self.controlBlockTable.setRowCount(0)
             return
         
         # 获取逻辑节点
-        ap = self.server.ied.access_points.get(data['ap_name'])
+        ap = self._ied.access_points.get(data['ap_name'])
         if not ap:
             self.controlBlockTable.setRowCount(0)
             return
