@@ -8,16 +8,14 @@ Instance List Widget
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
+    QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QDialog, QLineEdit, QSpinBox, QFormLayout,
-    QDialogButtonBox, QMenu, QFrame, QToolButton, QSizePolicy, QFileDialog
+    QDialogButtonBox, QFrame, QToolButton, QSizePolicy, QFileDialog, QScrollArea
 )
-from PyQt6.QtGui import QIcon, QAction, QColor
-
 
 class InstanceCreateDialog(QDialog):
     """实例创建对话框"""
@@ -130,6 +128,9 @@ class InstanceItemWidget(QFrame):
     ):
         super().__init__(parent)
         self.instance_id = instance_id
+        self._name = name
+        self._details = details
+        self._state = state
         
         self._init_ui(name, state, details)
         self._update_style(state)
@@ -206,11 +207,20 @@ class InstanceItemWidget(QFrame):
     
     def update_state(self, state: str):
         """更新状态"""
+        self._state = state
         self._update_style(state)
     
     def update_details(self, details: str):
         """更新详情"""
+        self._details = details
         self.details_label.setText(details)
+
+    def matches_filter(self, query: str) -> bool:
+        """检查是否匹配筛选条件"""
+        if not query:
+            return True
+        haystack = f"{self._name} {self._details} {self._state} {self.instance_id}".lower()
+        return query.lower() in haystack
     
     def mousePressEvent(self, event):
         """点击选择"""
@@ -269,15 +279,26 @@ class InstanceListWidget(QWidget):
         header.addWidget(self.add_btn)
         
         layout.addLayout(header)
+
+        # 搜索框
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("搜索实例")
+        self.search_input.textChanged.connect(self._apply_filter)
+        layout.addWidget(self.search_input)
         
-        # 实例列表容器
+        # 实例列表容器（可滚动）
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(0, 0, 0, 0)
         self.list_layout.setSpacing(4)
         self.list_layout.addStretch()
-        
-        layout.addWidget(self.list_container)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setWidget(self.list_container)
+
+        layout.addWidget(self.scroll_area)
     
     def _on_add_clicked(self):
         """添加按钮点击"""
@@ -318,6 +339,7 @@ class InstanceListWidget(QWidget):
         # 插入到stretch之前
         self.list_layout.insertWidget(self.list_layout.count() - 1, item)
         self._items[instance_id] = item
+        self._apply_filter()
     
     def remove_instance(self, instance_id: str):
         """从列表移除实例"""
@@ -329,6 +351,7 @@ class InstanceListWidget(QWidget):
             
             if self._selected_id == instance_id:
                 self._selected_id = None
+            self._apply_filter()
     
     def update_instance_state(self, instance_id: str, state: str):
         """更新实例状态"""
@@ -371,3 +394,9 @@ class InstanceListWidget(QWidget):
         
         self._selected_id = instance_id
         self.instance_selected.emit(instance_id)
+
+    def _apply_filter(self):
+        """根据搜索框筛选实例"""
+        query = self.search_input.text().strip()
+        for item in self._items.values():
+            item.setVisible(item.matches_filter(query))
