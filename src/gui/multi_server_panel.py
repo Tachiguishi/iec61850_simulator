@@ -236,6 +236,7 @@ class MultiServerPanel(QWidget):
         
         panel = ServerPanel(instance_config, self)
         panel.server = instance.proxy
+        panel.set_instance_id(instance.id)
         panel.set_ied(instance.ied)
         panel.model_loaded.connect(lambda ied, iid=instance.id: self._on_model_loaded(iid, ied))
         panel.log_message.connect(

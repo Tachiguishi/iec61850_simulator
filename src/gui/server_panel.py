@@ -52,6 +52,7 @@ class ServerPanel(QWidget):
         self.config = config
         self.server: Optional[IEC61850ServerProxy] = None
         self._ied: Optional[IED] = None
+        self._instance_id: str = "default"
         self.data_model_manager = DataModelManager()
         
         # 加载UI文件
@@ -61,6 +62,11 @@ class ServerPanel(QWidget):
         self._init_server()
         self._connect_signals()
         self._setup_timers()
+
+    def set_instance_id(self, instance_id: str) -> None:
+        """设置当前实例ID"""
+        if instance_id:
+            self._instance_id = instance_id
     
     def _init_ui(self):
         """初始化UI附加设置"""
@@ -130,10 +136,10 @@ class ServerPanel(QWidget):
         self.server = IEC61850ServerProxy(config, socket_path, timeout_ms)
         
         # 连接回调
-        self.server.on_state_change(self._on_server_state_changed)
-        self.server.on_connection_change(self._on_connection_changed)
-        self.server.on_data_change(self._on_data_changed)
-        self.server.on_log(lambda level, msg: self.log_message.emit(level, msg))
+        self.server.on_state_change(self._instance_id, self._on_server_state_changed)
+        self.server.on_connection_change(self._instance_id, self._on_connection_changed)
+        self.server.on_data_change(self._instance_id, self._on_data_changed)
+        self.server.on_log(self._instance_id, self._on_instance_log)
         
         # 更新UI
         self.ipInput.setText(config.ip_address)
@@ -174,7 +180,7 @@ class ServerPanel(QWidget):
         if not self._ied:
             self._create_default_model()
 
-        if self.server.start(self._ied):
+        if self.server.start(self._instance_id, self._ied):
             self.startBtn.setEnabled(False)
             self.stopBtn.setEnabled(True)
             self._disable_config_inputs(True)
@@ -189,7 +195,7 @@ class ServerPanel(QWidget):
     def stop_server(self):
         """停止服务器"""
         if self.server:
-            self.server.stop()
+            self.server.stop(self._instance_id)
             
             self.startBtn.setEnabled(True)
             self.stopBtn.setEnabled(False)
@@ -216,7 +222,7 @@ class ServerPanel(QWidget):
         self._ied = ied
         
         if self.server:
-            self.server.load_model(ied)
+            self.server.load_model(self._instance_id, ied)
         
         self._update_data_tree()
         self.modelInfoLabel.setText(f"已加载: {name}")
@@ -235,7 +241,7 @@ class ServerPanel(QWidget):
             if ieds:
                 try:
                     if self.server:
-                        self.server.load_model(ieds[1])
+                        self.server.load_model(self._instance_id, ieds[1])
                     self._ied = ieds[1]
                     self.modelInfoLabel.setText(f"已加载: {ieds[1].name}")
                     self._update_data_tree()
@@ -289,7 +295,7 @@ class ServerPanel(QWidget):
                 da.value = value
                 da.timestamp = datetime.now()
         if self.server:
-            self.server.set_data_value(reference, value)
+            self.server.set_data_value(self._instance_id, reference, value)
     
     def _on_item_selected(self, reference: str):
         """处理选中项变化"""
@@ -309,7 +315,7 @@ class ServerPanel(QWidget):
             return
         
         references = self._ied.get_all_references()
-        values = self.server.get_values(references)
+        values = self.server.get_values(self._instance_id, references)
         if values:
             self.data_tree.update_values(values)
     
@@ -318,7 +324,7 @@ class ServerPanel(QWidget):
         if not self.server:
             return
         
-        clients = self.server.get_connected_clients()
+        clients = self.server.get_connected_clients(self._instance_id)
         
         self.connectionTable.setRowCount(len(clients))
         for i, client in enumerate(clients):
@@ -341,6 +347,10 @@ class ServerPanel(QWidget):
         text, color = state_text.get(state, ("未知", "#6c757d"))
         self.statusLabel.setText(f"状态: {text}")
         self.statusLabel.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+    def _on_instance_log(self, level: str, message: str) -> None:
+        """过滤实例日志"""
+        self.log_message.emit(level, message)
     
     def _on_connection_changed(self, client_id: str, connected: bool):
         """连接变化回调"""

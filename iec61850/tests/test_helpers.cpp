@@ -4,6 +4,8 @@
 
 #include <fstream>
 #include <stdexcept>
+#include <limits.h>
+#include <unistd.h>
 
 /*
 {
@@ -860,8 +862,14 @@ void pack_default_model_payload(msgpack::packer<msgpack::sbuffer>& pk) {
 
 void pack_payload_from_json_file(msgpack::packer<msgpack::sbuffer>& pk, const std::string& model_path){
   // 如果路径是相对路径，则是相对当前执行文件的路径
-  std::filesystem::path exec_path = std::filesystem::current_path();
-  std::filesystem::path json_path = exec_path / model_path;
+  char buffer[PATH_MAX] = {0};
+  ssize_t len = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+  std::filesystem::path json_path = model_path;
+  if (len > 0) {
+    buffer[len] = '\0';
+    std::filesystem::path exe_path(buffer);
+    json_path = exe_path.parent_path() / model_path;
+  }
   std::ifstream input(json_path);
   if (!input.is_open()) {
     throw std::runtime_error("Failed to open JSON file: " + model_path);

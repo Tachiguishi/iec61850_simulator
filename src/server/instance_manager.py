@@ -33,10 +33,9 @@ class ServerInstance:
     ied: Optional[IED] = None
     scl_file_path: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
-    
-    @property
-    def state(self) -> ServerState:
-        return self.proxy.state
+    state: ServerState = ServerState.STOPPED
+    _state_callback: Optional[Callable[[ServerState], None]] = None
+    _log_callback: Optional[Callable[[str, str], None]] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -124,25 +123,28 @@ class ServerInstanceManager:
                 raise ValueError(f"端口 {config.port} 已被实例 '{inst.name}' 使用")
         
         proxy = IEC61850ServerProxy(config, self._socket_path, self._timeout_ms)
-        proxy.instance_id = instance_id  # 为proxy添加实例ID
         
         # 转发状态变化回调
         def on_state_change(state: ServerState):
+            instance.state = state
             for callback in self._instance_state_callbacks:
                 callback(instance_id, state)
-        proxy.on_state_change(on_state_change)
+        proxy.on_state_change(instance_id, on_state_change)
         
         # 转发日志回调
         def on_log(level: str, message: str):
             for callback in self._log_callbacks:
                 callback(instance_id, level, message)
-        proxy.on_log(on_log)
+        proxy.on_log(instance_id, on_log)
         
         instance = ServerInstance(
             id=instance_id,
             name=name,
             config=config,
             proxy=proxy,
+            state=ServerState.STOPPED,
+            _state_callback=on_state_change,
+            _log_callback=on_log,
         )
         
         self._instances[instance_id] = instance
@@ -173,7 +175,13 @@ class ServerInstanceManager:
         
         # 如果正在运行，先停止
         if instance.state == ServerState.RUNNING:
-            instance.proxy.stop()
+            instance.proxy.stop(instance.id)
+
+        # 注销回调
+        if instance._state_callback:
+            instance.proxy.off_state_change(instance.id, instance._state_callback)
+        if instance._log_callback:
+            instance.proxy.off_log(instance.id, instance._log_callback)
         
         del self._instances[instance_id]
         
@@ -212,7 +220,7 @@ class ServerInstanceManager:
             self._log(instance_id, "error", "实例未加载IED模型")
             return False
 
-        return instance.proxy.start(instance.ied)
+        return instance.proxy.start(instance.id, instance.ied)
     
     def stop_instance(self, instance_id: str) -> bool:
         """停止指定实例"""
@@ -220,13 +228,13 @@ class ServerInstanceManager:
         if not instance:
             return False
         
-        return instance.proxy.stop()
+        return instance.proxy.stop(instance.id)
     
     def stop_all_instances(self) -> None:
         """停止所有实例"""
         for instance in self._instances.values():
             if instance.state == ServerState.RUNNING:
-                instance.proxy.stop()
+                instance.proxy.stop(instance.id)
     
     def load_model(self, instance_id: str, ied: IED) -> bool:
         """为指定实例加载数据模型"""
@@ -234,7 +242,7 @@ class ServerInstanceManager:
         if not instance:
             return False
         instance.ied = ied
-        instance.proxy.load_model(ied)
+        instance.proxy.load_model(instance.id, ied)
         return True
     
     def set_value(self, instance_id: str, reference: str, value: Any) -> bool:
@@ -243,7 +251,7 @@ class ServerInstanceManager:
         if not instance:
             return False
         
-        instance.proxy.set_data_value(reference, value)
+        instance.proxy.set_data_value(instance.id, reference, value)
         return True
     
     def get_values(self, instance_id: str, references: List[str]) -> Dict[str, Any]:
@@ -252,7 +260,7 @@ class ServerInstanceManager:
         if not instance:
             return {}
         
-        return instance.proxy.get_values(references)
+        return instance.proxy.get_values(instance.id, references)
     
     # =========================================================================
     # 快捷方法
@@ -279,14 +287,14 @@ class ServerInstanceManager:
         
         if ied:
             instance.ied = ied
-            instance.proxy.load_model(ied)
+            instance.proxy.load_model(instance.id, ied)
         else:
             # 创建默认模型
             dm = DataModelManager()
             instance.ied = dm.create_default_ied()
-            instance.proxy.load_model(instance.ied)
+            instance.proxy.load_model(instance.id, instance.ied)
         
-        if instance.proxy.start(instance.ied):
+        if instance.proxy.start(instance.id, instance.ied):
             return instance
         else:
             self.remove_instance(instance.id)
@@ -350,7 +358,7 @@ class ServerInstanceManager:
                 # 加载IED模型
                 instance.ied = ied
                 instance.scl_file_path = str(scd_path)
-                instance.proxy.load_model(ied)
+                instance.proxy.load_model(instance.id, ied)
                 
                 if auto_start:
                     self.start_instance(instance.id)
@@ -497,7 +505,7 @@ class ServerInstanceManager:
                         if ied:
                             instance.ied = ied
                             instance.scl_file_path = scl_file
-                            instance.proxy.load_model(ied)
+                            instance.proxy.load_model(instance.id, ied)
                     
                     if auto_start:
                         self.start_instance(instance.id)
