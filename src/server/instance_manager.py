@@ -182,7 +182,7 @@ class ServerInstanceManager:
             instance.proxy.off_state_change(instance.id, instance._state_callback)
         if instance._log_callback:
             instance.proxy.off_log(instance.id, instance._log_callback)
-        
+        instance.proxy.close()
         del self._instances[instance_id]
         
         # 触发回调

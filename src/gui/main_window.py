@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
     """
     
     mode_changed = pyqtSignal(str)  # "server" 或 "client"
+    logger_message = pyqtSignal(str, str)  # level, message
     
     def __init__(self):
         super().__init__()
@@ -63,6 +64,8 @@ class MainWindow(QMainWindow):
         uic.loadUi(UI_DIR / "main_window.ui", self)
         
         self._network_proxy = None
+
+        self.logger_message.connect(self._append_log_message)
 
         self._init_ui()
         self._init_panels()
@@ -196,9 +199,13 @@ class MainWindow(QMainWindow):
             record = message.record
             level = record["level"].name.lower()
             text = record["message"]
-            self.log_widget.append_log(level, text)
+            self.logger_message.emit(level, text)
         
         logger.add(log_handler, format="{message}", level="DEBUG")
+
+    def _append_log_message(self, level: str, text: str):
+        """在主线程追加日志"""
+        self.log_widget.append_log(level, text)
 
     def _init_core_process(self):
         """初始化并启动通信核心进程"""

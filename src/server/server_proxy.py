@@ -49,24 +49,9 @@ class ServerConfig:
 class IEC61850ServerProxy:
     """
     Server proxy for GUI, delegating IEC61850 networking to C++ backend via IPC.
-    
-    单例模式：确保全局只有一个服务器代理实例，避免重复连接。
     """
 
-    _instance: Optional['IEC61850ServerProxy'] = None
-    _initialized: bool = False
-
-    def __new__(cls, config: Optional[ServerConfig] = None, socket_path: str = "", timeout_ms: int = 3000):
-        """单例模式：确保只创建一个实例"""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
     def __init__(self, config: Optional[ServerConfig] = None, socket_path: str = "", timeout_ms: int = 3000):
-        # 避免重复初始化
-        if self._initialized:
-            return
-        
         self.config = config or ServerConfig()
         self._states: Dict[str, ServerState] = {}
 
@@ -77,8 +62,6 @@ class IEC61850ServerProxy:
         self._connection_callbacks: Dict[str, Callable[[str, bool], None]] = {}
         self._data_callbacks: Dict[str, Callable[[str, Any, Any], None]] = {}
         self._log_callbacks: Dict[str, Callable[[str, str], None]] = {}
-        
-        self._initialized = True
 
     # =====================================================================
     # Callback registration
@@ -87,14 +70,34 @@ class IEC61850ServerProxy:
     def on_state_change(self, instance_id: str, callback: Callable[[ServerState], None]) -> None:
         self._state_callbacks[instance_id] = callback
 
+    def off_state_change(self, instance_id: str, callback: Callable[[ServerState], None]) -> None:
+        registered = self._state_callbacks.get(instance_id)
+        if registered is callback:
+            del self._state_callbacks[instance_id]
+
     def on_connection_change(self, instance_id: str, callback: Callable[[str, bool], None]) -> None:
         self._connection_callbacks[instance_id] = callback
+
+    def off_connection_change(self, instance_id: str, callback: Callable[[str, bool], None]) -> None:
+        registered = self._connection_callbacks.get(instance_id)
+        if registered is callback:
+            del self._connection_callbacks[instance_id]
 
     def on_data_change(self, instance_id: str, callback: Callable[[str, Any, Any], None]) -> None:
         self._data_callbacks[instance_id] = callback
 
+    def off_data_change(self, instance_id: str, callback: Callable[[str, Any, Any], None]) -> None:
+        registered = self._data_callbacks.get(instance_id)
+        if registered is callback:
+            del self._data_callbacks[instance_id]
+
     def on_log(self, instance_id: str, callback: Callable[[str, str], None]) -> None:
         self._log_callbacks[instance_id] = callback
+
+    def off_log(self, instance_id: str, callback: Callable[[str, str], None]) -> None:
+        registered = self._log_callbacks.get(instance_id)
+        if registered is callback:
+            del self._log_callbacks[instance_id]
 
     def remove_callback(self, instance_id: str) -> None:
         if instance_id in self._state_callbacks:
@@ -108,6 +111,10 @@ class IEC61850ServerProxy:
         
         if instance_id in self._log_callbacks:
             del self._log_callbacks[instance_id]
+
+    def close(self) -> None:
+        """释放IPC连接资源"""
+        self._ipc.close()
 
     # =====================================================================
     # Lifecycle
@@ -185,7 +192,8 @@ class IEC61850ServerProxy:
             response = self._ipc.request("server.set_data_value", {"instance_id": instance_id, "reference": reference, "value": value})
             if not response.data.get("success", False):
                 raise IPCError("Backend failed to set data value")
-            for callback in self._data_callbacks.get(instance_id, []):
+            callback = self._data_callbacks.get(instance_id)
+            if callback:
                 callback(reference, old_value, value)
         except IPCError as exc:
             self._log(instance_id, "error", f"Set value failed: {exc}")

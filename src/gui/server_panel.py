@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
@@ -45,6 +45,10 @@ class ServerPanel(QWidget):
     
     log_message = pyqtSignal(str, str)  # level, message
     model_loaded = pyqtSignal(object)  # IED
+    _state_changed_signal = pyqtSignal(object)
+    _connection_changed_signal = pyqtSignal(str, bool)
+    _data_changed_signal = pyqtSignal(str, object, object)
+    _instance_log_signal = pyqtSignal(str, str)
     
     def __init__(self, config: Dict, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -53,6 +57,10 @@ class ServerPanel(QWidget):
         self.server: Optional[IEC61850ServerProxy] = None
         self._ied: Optional[IED] = None
         self._instance_id: str = "default"
+        self._state_callback = None
+        self._connection_callback = None
+        self._data_callback = None
+        self._log_callback = None
         self.data_model_manager = DataModelManager()
         
         # 加载UI文件
@@ -63,10 +71,20 @@ class ServerPanel(QWidget):
         self._connect_signals()
         self._setup_timers()
 
+        self._state_changed_signal.connect(self._on_server_state_changed)
+        self._connection_changed_signal.connect(self._on_connection_changed)
+        self._data_changed_signal.connect(self._on_data_changed)
+        self._instance_log_signal.connect(self._on_instance_log)
+
     def set_instance_id(self, instance_id: str) -> None:
         """设置当前实例ID"""
-        if instance_id:
-            self._instance_id = instance_id
+        if not instance_id or instance_id == self._instance_id:
+            return
+        if self.server:
+            self._unregister_callbacks()
+        self._instance_id = instance_id
+        if self.server:
+            self._register_callbacks()
     
     def _init_ui(self):
         """初始化UI附加设置"""
@@ -136,10 +154,7 @@ class ServerPanel(QWidget):
         self.server = IEC61850ServerProxy(config, socket_path, timeout_ms)
         
         # 连接回调
-        self.server.on_state_change(self._instance_id, self._on_server_state_changed)
-        self.server.on_connection_change(self._instance_id, self._on_connection_changed)
-        self.server.on_data_change(self._instance_id, self._on_data_changed)
-        self.server.on_log(self._instance_id, self._on_instance_log)
+        self._register_callbacks()
         
         # 更新UI
         self.ipInput.setText(config.ip_address)
@@ -148,6 +163,32 @@ class ServerPanel(QWidget):
         self.updateIntervalInput.setValue(config.update_interval_ms)
         self.randomValuesCheck.setChecked(config.enable_random_values)
         self.reportingCheck.setChecked(config.enable_reporting)
+
+    def _register_callbacks(self) -> None:
+        """注册实例回调"""
+        if not self.server:
+            return
+        self._state_callback = lambda state: self._state_changed_signal.emit(state)
+        self._connection_callback = lambda client_id, connected: self._connection_changed_signal.emit(client_id, connected)
+        self._data_callback = lambda reference, old_value, new_value: self._data_changed_signal.emit(reference, old_value, new_value)
+        self._log_callback = lambda level, message: self._instance_log_signal.emit(level, message)
+        self.server.on_state_change(self._instance_id, self._state_callback)
+        self.server.on_connection_change(self._instance_id, self._connection_callback)
+        self.server.on_data_change(self._instance_id, self._data_callback)
+        self.server.on_log(self._instance_id, self._log_callback)
+
+    def _unregister_callbacks(self) -> None:
+        """注销实例回调"""
+        if not self.server:
+            return
+        if self._state_callback:
+            self.server.off_state_change(self._instance_id, self._state_callback)
+        if self._connection_callback:
+            self.server.off_connection_change(self._instance_id, self._connection_callback)
+        if self._data_callback:
+            self.server.off_data_change(self._instance_id, self._data_callback)
+        if self._log_callback:
+            self.server.off_log(self._instance_id, self._log_callback)
         
     def _setup_timers(self):
         """设置定时器"""

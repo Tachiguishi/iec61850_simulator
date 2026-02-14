@@ -18,7 +18,6 @@ def get_test_output_path(filename: str) -> str:
 	import os
 	return os.path.join(os.path.dirname(__file__), "../iec61850/build/tests", filename)
 
-
 def test_default_model_creation():
 	"""测试默认数据模型的创建"""
 	manager = DataModelManager()
@@ -29,6 +28,14 @@ def test_default_model_creation():
 	with open(get_test_output_path("default_ied.json"), "w") as f:
 		json.dump(ied.to_dict(), f, indent=2)
 
+
+def test_load_from_scd():
+	"""测试从test_data/test_scd.xml加载数据模型"""
+	manager = DataModelManager()
+	ieds = manager.load_from_scd(get_test_data_path("test.scd"))
+	assert len(ieds) == 30
+	# with open(get_test_output_path("test_scd_ied.json"), "w") as f:
+	# 	json.dump(ieds[0].to_dict(), f, indent=2)
 
 def test_load_from_report_goose_cid():
 	"""测试从test_data/report_goose.cid加载数据模型"""

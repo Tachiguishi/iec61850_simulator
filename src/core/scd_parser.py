@@ -57,10 +57,13 @@ class SCDParser:
 			# 使用通配符方式查找 IED 元素，忽略命名空间
 			for ied_elem in root.findall('./{*}IED'):
 				ied = self._parse_ied_from_scd(ied_elem)
+				logger.info(f"Parsed IED: {ied.name if ied else 'None'}")
 				if ied:
 					# 解析通信参数并关联到 AccessPoint
 					self._apply_communication_params(ied)
 					loaded_ieds.append(ied)
+
+			logger.info(f"Successfully loaded {len(loaded_ieds)} IED(s) from SCD file: {scd_path}")
 			
 			return loaded_ieds
 			

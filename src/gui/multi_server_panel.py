@@ -8,22 +8,99 @@ Multi-Instance Server Panel
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
+from loguru import logger
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QObject, QThread
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QStackedWidget, QLabel, QMessageBox, QFileDialog
+    QStackedWidget, QLabel, QMessageBox, QFileDialog, QProgressDialog
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gui.instance_list_widget import InstanceListWidget
 from gui.server_panel import ServerPanel
+from core.scd_parser import SCDParser
 from server.instance_manager import ServerInstanceManager, ServerInstance
 from server.server_proxy import ServerConfig, ServerState
+
+
+class _SCDParseWorker(QObject):
+    parsed = pyqtSignal(list)
+    failed = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, scd_path: str):
+        super().__init__()
+        self._scd_path = scd_path
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        try:
+            parser = SCDParser()
+            ieds = parser.parse(self._scd_path)
+            if not self._cancelled:
+                self.parsed.emit(ieds)
+        except Exception as exc:
+            if not self._cancelled:
+                self.failed.emit(str(exc))
+        finally:
+            self.finished.emit()
+
+
+class _ModelLoadWorker(QObject):
+    progress = pyqtSignal(int, int)
+    failed = pyqtSignal(str)
+    finished = pyqtSignal(int, int)
+
+    def __init__(self, instances: list[ServerInstance], auto_start: bool):
+        super().__init__()
+        self._instances = instances
+        self._auto_start = auto_start
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def _load_one(self, instance: ServerInstance) -> None:
+        instance.proxy.load_model(instance.id, instance.ied)
+        if self._auto_start:
+            instance.proxy.start(instance.id, instance.ied)
+
+    def run(self) -> None:
+        total = len(self._instances)
+        if total == 0:
+            self.finished.emit(0, 0)
+            return
+
+        done = 0
+        try:
+            with ThreadPoolExecutor(max_workers=min(8, total)) as executor:
+                future_map = {
+                    executor.submit(self._load_one, instance): instance.id
+                    for instance in self._instances
+                }
+
+                for future in as_completed(future_map):
+                    if self._cancelled:
+                        for pending in future_map:
+                            pending.cancel()
+                        break
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        self.failed.emit(str(exc))
+                    done += 1
+                    self.progress.emit(done, total)
+        finally:
+            self.finished.emit(done, total)
 
 
 class MultiServerPanel(QWidget):
@@ -38,6 +115,10 @@ class MultiServerPanel(QWidget):
     """
     
     log_message = pyqtSignal(str, str)  # level, message
+    _instance_added_signal = pyqtSignal(object)
+    _instance_removed_signal = pyqtSignal(str)
+    _instance_state_signal = pyqtSignal(str, object)
+    _instance_log_signal = pyqtSignal(str, str, str)
     
     def __init__(self, config: Dict, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -58,10 +139,23 @@ class MultiServerPanel(QWidget):
     
     def _setup_manager_callbacks(self):
         """设置实例管理器回调"""
-        self.instance_manager.on_instance_added(self._on_instance_added)
-        self.instance_manager.on_instance_removed(self._on_instance_removed)
-        self.instance_manager.on_instance_state_change(self._on_instance_state_change)
-        self.instance_manager.on_log(self._on_instance_log)
+        self._instance_added_signal.connect(self._on_instance_added)
+        self._instance_removed_signal.connect(self._on_instance_removed)
+        self._instance_state_signal.connect(self._on_instance_state_change)
+        self._instance_log_signal.connect(self._on_instance_log)
+
+        self.instance_manager.on_instance_added(
+            lambda instance: self._instance_added_signal.emit(instance)
+        )
+        self.instance_manager.on_instance_removed(
+            lambda instance_id: self._instance_removed_signal.emit(instance_id)
+        )
+        self.instance_manager.on_instance_state_change(
+            lambda instance_id, state: self._instance_state_signal.emit(instance_id, state)
+        )
+        self.instance_manager.on_log(
+            lambda instance_id, level, message: self._instance_log_signal.emit(instance_id, level, message)
+        )
     
     def _init_ui(self):
         """初始化UI"""
@@ -101,7 +195,7 @@ class MultiServerPanel(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
         splitter.addWidget(self.detail_stack)
-        splitter.setSizes([280, 720])
+        splitter.setSizes([320, 720])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         
@@ -324,17 +418,117 @@ class MultiServerPanel(QWidget):
 
     def _import_from_scd_file(self, file_path: str, base_port: int = 102, auto_start: bool = False) -> int:
         """从SCD/CID文件导入IED并创建实例"""
-        instances = self.instance_manager.import_from_scd(file_path, base_port, auto_start)
 
-        # 为导入的实例创建面板
-        for instance in instances:
-            self._create_instance_panel(instance)
+        logger.info(f"Importing IEDs from SCD file: {file_path}")
 
-        if instances:
+        self._parse_progress = QProgressDialog("正在解析SCD文件...", "", 0, 0, self)
+        self._parse_progress.setCancelButton(None)
+        self._parse_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._parse_progress.show()
+
+        self._parse_thread = QThread(self)
+        self._parse_worker = _SCDParseWorker(file_path)
+        self._parse_worker.moveToThread(self._parse_thread)
+        self._parse_thread.started.connect(self._parse_worker.run)
+        self._parse_worker.parsed.connect(
+            lambda ieds: self._on_scd_parsed(ieds, file_path, base_port, auto_start)
+        )
+        self._parse_worker.failed.connect(self._on_scd_parse_failed)
+        self._parse_worker.finished.connect(self._parse_thread.quit)
+        self._parse_worker.finished.connect(self._parse_worker.deleteLater)
+        self._parse_thread.finished.connect(self._parse_thread.deleteLater)
+        self._parse_thread.start()
+
+        return 0
+
+    def _on_scd_parse_failed(self, message: str) -> None:
+        if hasattr(self, "_parse_progress") and self._parse_progress:
+            self._parse_progress.close()
+            self._parse_progress = None
+        self._parse_worker = None
+        self._parse_thread = None
+        QMessageBox.warning(self, "导入失败", f"解析SCD文件失败: {message}")
+
+    def _on_scd_parsed(self, ieds: list, file_path: str, base_port: int, auto_start: bool) -> None:
+        if hasattr(self, "_parse_progress") and self._parse_progress:
+            self._parse_progress.close()
+            self._parse_progress = None
+        self._parse_worker = None
+        self._parse_thread = None
+
+        if not ieds:
+            QMessageBox.warning(self, "导入失败", "未能从SCD文件导入任何IED")
+            return
+
+        instances: list[ServerInstance] = []
+        current_port = base_port
+
+        for ied in ieds:
+            try:
+                while self.instance_manager._is_port_in_use(current_port):
+                    current_port += 1
+
+                config = ServerConfig(
+                    ip_address="0.0.0.0",
+                    port=current_port,
+                )
+
+                instance = self.instance_manager.create_instance(
+                    name=ied.name,
+                    config=config,
+                )
+
+                instance.ied = ied
+                instance.scl_file_path = str(file_path)
+                self._create_instance_panel(instance)
+                instances.append(instance)
+                current_port += 1
+            except Exception as exc:
+                self.log_message.emit("error", f"导入IED失败: {exc}")
+                continue
+
+        self._start_model_load(instances, auto_start)
+
+    def _start_model_load(self, instances: list[ServerInstance], auto_start: bool) -> None:
+        if not instances:
+            QMessageBox.warning(self, "导入失败", "未能创建任何IED实例")
+            return
+
+        logger.info(f"Starting to load models for {len(instances)} IED instances...")
+        self._load_progress = QProgressDialog("正在加载IED模型...", "取消", 0, len(instances), self)
+        self._load_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._load_progress.setValue(0)
+
+        self._load_thread = QThread(self)
+        self._load_worker = _ModelLoadWorker(instances, auto_start)
+        self._load_worker.moveToThread(self._load_thread)
+        self._load_thread.started.connect(self._load_worker.run)
+        self._load_worker.progress.connect(self._on_load_progress)
+        self._load_worker.failed.connect(lambda msg: self.log_message.emit("error", f"加载IED失败: {msg}"))
+        self._load_worker.finished.connect(self._on_load_finished)
+        self._load_worker.finished.connect(self._load_thread.quit)
+        self._load_worker.finished.connect(self._load_worker.deleteLater)
+        self._load_thread.finished.connect(self._load_thread.deleteLater)
+        self._load_progress.canceled.connect(self._load_worker.cancel)
+        self._load_thread.start()
+
+    def _on_load_progress(self, done: int, total: int) -> None:
+        if hasattr(self, "_load_progress") and self._load_progress:
+            self._load_progress.setMaximum(total)
+            self._load_progress.setValue(done)
+
+    def _on_load_finished(self, done: int, total: int) -> None:
+        if hasattr(self, "_load_progress") and self._load_progress:
+            self._load_progress.close()
+            self._load_progress = None
+        self._load_worker = None
+        self._load_thread = None
+
+        if done > 0:
             QMessageBox.information(
                 self,
                 "导入成功",
-                f"成功从SCD文件导入 {len(instances)} 个IED实例"
+                f"成功从SCD文件导入 {done} 个IED实例"
             )
         else:
             QMessageBox.warning(
@@ -342,5 +536,3 @@ class MultiServerPanel(QWidget):
                 "导入失败",
                 "未能从SCD文件导入任何IED"
             )
-
-        return len(instances)
