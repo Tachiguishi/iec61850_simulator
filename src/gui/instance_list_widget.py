@@ -102,6 +102,7 @@ class InstanceItemWidget(QFrame):
     # 信号
     start_clicked = pyqtSignal(str)  # instance_id
     stop_clicked = pyqtSignal(str)  # instance_id
+    config_clicked = pyqtSignal(str)  # instance_id
     remove_clicked = pyqtSignal(str)  # instance_id
     selected = pyqtSignal(str)  # instance_id
     
@@ -173,17 +174,15 @@ class InstanceItemWidget(QFrame):
         layout.addWidget(self.state_label)
         
         # 操作按钮
-        self.start_btn = QToolButton()
-        self.start_btn.setText("▶")
-        self.start_btn.setToolTip("启动")
-        self.start_btn.clicked.connect(lambda: self.start_clicked.emit(self.instance_id))
-        layout.addWidget(self.start_btn)
-        
-        self.stop_btn = QToolButton()
-        self.stop_btn.setText("⏹")
-        self.stop_btn.setToolTip("停止")
-        self.stop_btn.clicked.connect(lambda: self.stop_clicked.emit(self.instance_id))
-        layout.addWidget(self.stop_btn)
+        self.toggle_btn = QToolButton()
+        self.toggle_btn.clicked.connect(self._on_toggle_clicked)
+        layout.addWidget(self.toggle_btn)
+
+        self.config_btn = QToolButton()
+        self.config_btn.setText("⚙")
+        self.config_btn.setToolTip("配置")
+        self.config_btn.clicked.connect(lambda: self.config_clicked.emit(self.instance_id))
+        layout.addWidget(self.config_btn)
         
         self.remove_btn = QToolButton()
         self.remove_btn.setText("✕")
@@ -200,10 +199,28 @@ class InstanceItemWidget(QFrame):
         # 根据状态更新按钮可用性
         is_running = state in ("RUNNING", "CONNECTED")
         is_stopped = state in ("STOPPED", "DISCONNECTED", "ERROR")
-        
-        self.start_btn.setEnabled(is_stopped)
-        self.stop_btn.setEnabled(is_running)
+
+        if is_running:
+            self.toggle_btn.setText("⏹")
+            self.toggle_btn.setToolTip("停止")
+            self.toggle_btn.setEnabled(True)
+        elif is_stopped:
+            self.toggle_btn.setText("▶")
+            self.toggle_btn.setToolTip("启动")
+            self.toggle_btn.setEnabled(True)
+        else:
+            self.toggle_btn.setText("…")
+            self.toggle_btn.setToolTip("状态切换中")
+            self.toggle_btn.setEnabled(False)
+
         self.remove_btn.setEnabled(is_stopped)
+
+    def _on_toggle_clicked(self):
+        """启动/停止切换"""
+        if self._state in ("RUNNING", "CONNECTED"):
+            self.stop_clicked.emit(self.instance_id)
+        elif self._state in ("STOPPED", "DISCONNECTED", "ERROR"):
+            self.start_clicked.emit(self.instance_id)
     
     def update_state(self, state: str):
         """更新状态"""
@@ -240,6 +257,7 @@ class InstanceListWidget(QWidget):
     instance_removed = pyqtSignal(str)  # instance_id
     instance_started = pyqtSignal(str)  # instance_id
     instance_stopped = pyqtSignal(str)  # instance_id
+    instance_config_requested = pyqtSignal(str)  # instance_id
     instance_selected = pyqtSignal(str)  # instance_id
     
     def __init__(
@@ -333,6 +351,7 @@ class InstanceListWidget(QWidget):
         item = InstanceItemWidget(instance_id, name, state, details)
         item.start_clicked.connect(self.instance_started.emit)
         item.stop_clicked.connect(self.instance_stopped.emit)
+        item.config_clicked.connect(self.instance_config_requested.emit)
         item.remove_clicked.connect(self._on_remove_clicked)
         item.selected.connect(self._on_item_selected)
         

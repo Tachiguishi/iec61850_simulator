@@ -31,299 +31,6 @@
      <property name="orientation">
       <enum>Qt::Orientation::Horizontal</enum>
      </property>
-     <!-- Left Panel -->
-     <widget class="QWidget" name="leftPanel">
-      <layout class="QVBoxLayout" name="leftLayout">
-       <property name="leftMargin">
-        <number>0</number>
-       </property>
-       <property name="topMargin">
-        <number>0</number>
-       </property>
-       <property name="rightMargin">
-        <number>0</number>
-       </property>
-       <property name="bottomMargin">
-        <number>0</number>
-       </property>
-       <item>
-        <widget class="QGroupBox" name="configGroup">
-         <property name="title">
-          <string>服务器配置</string>
-         </property>
-         <layout class="QGridLayout" name="configLayout">
-          <item row="0" column="0">
-           <widget class="QLabel" name="ipLabel">
-            <property name="text">
-             <string>IP地址:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="0" column="1">
-           <widget class="QLineEdit" name="ipInput">
-            <property name="text">
-             <string>0.0.0.0</string>
-            </property>
-            <property name="placeholderText">
-             <string>0.0.0.0</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="0">
-           <widget class="QLabel" name="portLabel">
-            <property name="text">
-             <string>端口:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="1">
-           <widget class="QSpinBox" name="portInput">
-            <property name="minimum">
-             <number>1</number>
-            </property>
-            <property name="maximum">
-             <number>65535</number>
-            </property>
-            <property name="value">
-             <number>102</number>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="0">
-           <widget class="QLabel" name="maxConnLabel">
-            <property name="text">
-             <string>最大连接:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="1">
-           <widget class="QSpinBox" name="maxConnInput">
-            <property name="minimum">
-             <number>1</number>
-            </property>
-            <property name="maximum">
-             <number>100</number>
-            </property>
-            <property name="value">
-             <number>10</number>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="0">
-           <widget class="QLabel" name="updateIntervalLabel">
-            <property name="text">
-             <string>更新间隔(ms):</string>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="1">
-           <widget class="QSpinBox" name="updateIntervalInput">
-            <property name="minimum">
-             <number>100</number>
-            </property>
-            <property name="maximum">
-             <number>10000</number>
-            </property>
-            <property name="singleStep">
-             <number>100</number>
-            </property>
-            <property name="value">
-             <number>1000</number>
-            </property>
-           </widget>
-          </item>
-          <item row="4" column="0" colspan="2">
-           <widget class="QCheckBox" name="randomValuesCheck">
-            <property name="text">
-             <string>启用随机值仿真</string>
-            </property>
-           </widget>
-          </item>
-          <item row="5" column="0" colspan="2">
-           <widget class="QCheckBox" name="reportingCheck">
-            <property name="checked">
-             <bool>true</bool>
-            </property>
-            <property name="text">
-             <string>启用报告功能</string>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </widget>
-       </item>
-       <item>
-        <widget class="QGroupBox" name="controlGroup">
-         <property name="title">
-          <string>服务控制</string>
-         </property>
-         <layout class="QVBoxLayout" name="controlLayout">
-          <item>
-           <layout class="QHBoxLayout" name="btnLayout">
-            <item>
-             <widget class="QPushButton" name="startBtn">
-              <property name="minimumSize">
-               <size>
-                <width>0</width>
-                <height>40</height>
-               </size>
-              </property>
-              <property name="styleSheet">
-               <string notr="true">QPushButton {
-    background-color: #28a745;
-    color: white;
-    font-weight: bold;
-    border-radius: 5px;
-}
-QPushButton:hover {
-    background-color: #218838;
-}
-QPushButton:disabled {
-    background-color: #6c757d;
-}</string>
-              </property>
-              <property name="text">
-               <string>▶ 启动服务</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="stopBtn">
-              <property name="enabled">
-               <bool>false</bool>
-              </property>
-              <property name="minimumSize">
-               <size>
-                <width>0</width>
-                <height>40</height>
-               </size>
-              </property>
-              <property name="styleSheet">
-               <string notr="true">QPushButton {
-    background-color: #dc3545;
-    color: white;
-    font-weight: bold;
-    border-radius: 5px;
-}
-QPushButton:hover {
-    background-color: #c82333;
-}
-QPushButton:disabled {
-    background-color: #6c757d;
-}</string>
-              </property>
-              <property name="text">
-               <string>⏹ 停止服务</string>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </item>
-          <item>
-           <widget class="QLabel" name="statusLabel">
-            <property name="styleSheet">
-             <string notr="true">color: #666; font-size: 11px;</string>
-            </property>
-            <property name="text">
-             <string>状态: 未启动</string>
-            </property>
-            <property name="alignment">
-             <set>Qt::AlignmentFlag::AlignCenter</set>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </widget>
-       </item>
-       <item>
-        <widget class="QGroupBox" name="modelGroup">
-         <property name="title">
-          <string>数据模型</string>
-         </property>
-         <layout class="QVBoxLayout" name="modelLayout">
-          <item>
-           <layout class="QHBoxLayout" name="modelBtnLayout">
-            <item>
-             <widget class="QPushButton" name="loadModelBtn">
-              <property name="text">
-               <string>📂 加载模型</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="reloadModelBtn">
-              <property name="text">
-               <string>🔄 重新加载</string>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </item>
-          <item>
-           <widget class="QLabel" name="modelInfoLabel">
-            <property name="styleSheet">
-             <string notr="true">color: #666;</string>
-            </property>
-            <property name="text">
-             <string>未加载数据模型</string>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </widget>
-       </item>
-       <item>
-        <widget class="QGroupBox" name="connectionGroup">
-         <property name="title">
-          <string>客户端连接</string>
-         </property>
-         <layout class="QVBoxLayout" name="connectionLayout">
-          <item>
-           <widget class="QTableWidget" name="connectionTable">
-            <property name="alternatingRowColors">
-             <bool>true</bool>
-            </property>
-            <property name="selectionBehavior">
-             <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
-            </property>
-            <property name="columnCount">
-             <number>3</number>
-            </property>
-            <column>
-             <property name="text">
-              <string>客户端IP</string>
-             </property>
-            </column>
-            <column>
-             <property name="text">
-              <string>连接时间</string>
-             </property>
-            </column>
-            <column>
-             <property name="text">
-              <string>状态</string>
-             </property>
-            </column>
-           </widget>
-          </item>
-         </layout>
-        </widget>
-       </item>
-       <item>
-        <spacer name="verticalSpacer">
-         <property name="orientation">
-          <enum>Qt::Orientation::Vertical</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>20</width>
-           <height>40</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-      </layout>
-     </widget>
      <!-- Right Panel -->
      <widget class="QWidget" name="rightPanel">
       <layout class="QVBoxLayout" name="rightLayout">
@@ -552,6 +259,50 @@ QPushButton:disabled {
            </item>
           </layout>
          </widget>
+        <widget class="QWidget" name="connectionTab">
+         <attribute name="title">
+          <string>客户端连接</string>
+         </attribute>
+         <layout class="QVBoxLayout" name="connectionTabLayout">
+          <item>
+           <widget class="QGroupBox" name="connectionGroup">
+            <property name="title">
+             <string>客户端连接</string>
+            </property>
+            <layout class="QVBoxLayout" name="connectionLayout">
+             <item>
+              <widget class="QTableWidget" name="connectionTable">
+               <property name="alternatingRowColors">
+            <bool>true</bool>
+               </property>
+               <property name="selectionBehavior">
+            <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
+               </property>
+               <property name="columnCount">
+            <number>3</number>
+               </property>
+               <column>
+            <property name="text">
+             <string>客户端IP</string>
+            </property>
+               </column>
+               <column>
+            <property name="text">
+             <string>连接时间</string>
+            </property>
+               </column>
+               <column>
+            <property name="text">
+             <string>状态</string>
+            </property>
+               </column>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </widget>
          <widget class="QWidget" name="simulationTab">
           <attribute name="title">
            <string>仿真设置</string>

@@ -76,6 +76,28 @@ class ServerPanel(QWidget):
         self._data_changed_signal.connect(self._on_data_changed)
         self._instance_log_signal.connect(self._on_instance_log)
 
+    def bind_instance(
+        self,
+        server_proxy: IEC61850ServerProxy,
+        instance_id: str,
+        ied: Optional[IED],
+        state: Optional[ServerState] = None,
+    ) -> None:
+        """绑定到指定实例（用于多实例共享单个面板）"""
+        old_server = self.server
+        old_instance_id = self._instance_id
+
+        if old_server and self._state_callback:
+            self._unregister_callbacks(server=old_server, instance_id=old_instance_id)
+
+        self.server = server_proxy
+        self._instance_id = instance_id
+        self._register_callbacks()
+        self.set_ied(ied)
+
+        if state:
+            self._on_server_state_changed(state)
+
     def set_instance_id(self, instance_id: str) -> None:
         """设置当前实例ID"""
         if not instance_id or instance_id == self._instance_id:
@@ -88,10 +110,9 @@ class ServerPanel(QWidget):
     
     def _init_ui(self):
         """初始化UI附加设置"""
-        # 设置分割器大小
-        self.mainSplitter.setSizes([400, 800])
+        # 设置分割器大小（仅右侧详情面板）
+        self.mainSplitter.setSizes([1200])
         self.mainSplitter.setStretchFactor(0, 1)
-        self.mainSplitter.setStretchFactor(1, 2)
         
         # 设置连接表格表头
         self.connectionTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -115,14 +136,6 @@ class ServerPanel(QWidget):
     
     def _connect_signals(self):
         """连接信号"""
-        # 控制按钮
-        self.startBtn.clicked.connect(self.start_server)
-        self.stopBtn.clicked.connect(self.stop_server)
-        
-        # 模型操作
-        self.loadModelBtn.clicked.connect(self._load_data_model)
-        self.reloadModelBtn.clicked.connect(self._create_default_model)
-        
         # 仿真脚本
         self.runScriptBtn.clicked.connect(self._run_simulation_script)
         self.stopScriptBtn.clicked.connect(self._stop_simulation_script)
@@ -156,14 +169,6 @@ class ServerPanel(QWidget):
         # 连接回调
         self._register_callbacks()
         
-        # 更新UI
-        self.ipInput.setText(config.ip_address)
-        self.portInput.setValue(config.port)
-        self.maxConnInput.setValue(config.max_connections)
-        self.updateIntervalInput.setValue(config.update_interval_ms)
-        self.randomValuesCheck.setChecked(config.enable_random_values)
-        self.reportingCheck.setChecked(config.enable_reporting)
-
     def _register_callbacks(self) -> None:
         """注册实例回调"""
         if not self.server:
@@ -177,18 +182,24 @@ class ServerPanel(QWidget):
         self.server.on_data_change(self._instance_id, self._data_callback)
         self.server.on_log(self._instance_id, self._log_callback)
 
-    def _unregister_callbacks(self) -> None:
+    def _unregister_callbacks(
+        self,
+        server: Optional[IEC61850ServerProxy] = None,
+        instance_id: Optional[str] = None,
+    ) -> None:
         """注销实例回调"""
-        if not self.server:
+        target_server = server or self.server
+        target_instance_id = instance_id or self._instance_id
+        if not target_server:
             return
         if self._state_callback:
-            self.server.off_state_change(self._instance_id, self._state_callback)
+            target_server.off_state_change(target_instance_id, self._state_callback)
         if self._connection_callback:
-            self.server.off_connection_change(self._instance_id, self._connection_callback)
+            target_server.off_connection_change(target_instance_id, self._connection_callback)
         if self._data_callback:
-            self.server.off_data_change(self._instance_id, self._data_callback)
+            target_server.off_data_change(target_instance_id, self._data_callback)
         if self._log_callback:
-            self.server.off_log(self._instance_id, self._log_callback)
+            target_server.off_log(target_instance_id, self._log_callback)
         
     def _setup_timers(self):
         """设置定时器"""
@@ -209,23 +220,12 @@ class ServerPanel(QWidget):
         if not self.server:
             return False
         
-        # 更新配置
-        self.server.config.ip_address = self.ipInput.text()
-        self.server.config.port = self.portInput.value()
-        self.server.config.max_connections = self.maxConnInput.value()
-        self.server.config.update_interval_ms = self.updateIntervalInput.value()
-        self.server.config.enable_random_values = self.randomValuesCheck.isChecked()
-        self.server.config.enable_reporting = self.reportingCheck.isChecked()
-        
         # 确保有IED
         if not self._ied:
-            self._create_default_model()
+            self.log_message.emit("warning", "未加载数据模型，无法启动服务")
+            return False
 
         if self.server.start(self._instance_id, self._ied):
-            self.startBtn.setEnabled(False)
-            self.stopBtn.setEnabled(True)
-            self._disable_config_inputs(True)
-            
             # 启动定时器
             self.refresh_timer.start(500)
             self.client_timer.start(2000)
@@ -237,61 +237,13 @@ class ServerPanel(QWidget):
         """停止服务器"""
         if self.server:
             self.server.stop(self._instance_id)
-            
-            self.startBtn.setEnabled(True)
-            self.stopBtn.setEnabled(False)
-            self._disable_config_inputs(False)
-            
             # 停止定时器
             self.refresh_timer.stop()
             self.client_timer.stop()
     
-    def _disable_config_inputs(self, disabled: bool):
-        """禁用/启用配置输入"""
-        self.ipInput.setDisabled(disabled)
-        self.portInput.setDisabled(disabled)
-        self.maxConnInput.setDisabled(disabled)
-    
     # ========================================================================
     # 数据模型管理
     # ========================================================================
-    
-    def _create_default_model(self):
-        """创建默认数据模型"""
-        name = "SimulatedIED"
-        ied = self.data_model_manager.create_default_ied(name)
-        self._ied = ied
-        
-        if self.server:
-            self.server.load_model(self._instance_id, ied)
-        
-        self._update_data_tree()
-        self.modelInfoLabel.setText(f"已加载: {name}")
-        self.log_message.emit("info", f"已创建默认IED: {name}")
-        self.model_loaded.emit(ied)
-    
-    def _load_data_model(self):
-        """加载数据模型"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "加载数据模型", "",
-            "SCL Files (*.scd *.cid *.icd);;All Files (*)"
-        )
-        
-        if file_path:
-            ieds = self.data_model_manager.load_from_scd(file_path)
-            if ieds:
-                try:
-                    if self.server:
-                        self.server.load_model(self._instance_id, ieds[1])
-                    self._ied = ieds[1]
-                    self.modelInfoLabel.setText(f"已加载: {ieds[1].name}")
-                    self._update_data_tree()
-                    self.log_message.emit("info", f"已加载IED: {ieds[1].name}")
-                    self.model_loaded.emit(ieds[1])
-                except Exception as e:
-                    QMessageBox.critical(self, "错误", f"加载数据模型失败: {e}")
-            else:
-                QMessageBox.critical(self, "错误", "解析数据模型失败")
     
     def _update_data_tree(self):
         """更新数据树"""
@@ -301,12 +253,13 @@ class ServerPanel(QWidget):
 
     def set_ied(self, ied: Optional[IED]) -> None:
         """设置当前IED并刷新模型显示"""
+        # check if the same IED is being set
+        if self._ied and ied and self._ied.name == ied.name:
+            return
         self._ied = ied
-        if ied:
-            self.modelInfoLabel.setText(f"已加载: {ied.name}")
-        else:
-            self.modelInfoLabel.setText("未加载模型")
         self._update_data_tree()
+        if ied:
+            self.log_message.emit("info", f"已绑定IED: {ied.name}")
     
     # ========================================================================
     # 仿真
@@ -386,8 +339,9 @@ class ServerPanel(QWidget):
         }
         
         text, color = state_text.get(state, ("未知", "#6c757d"))
-        self.statusLabel.setText(f"状态: {text}")
-        self.statusLabel.setStyleSheet(f"color: {color}; font-size: 11px;")
+        if hasattr(self, "statusLabel"):
+            self.statusLabel.setText(f"状态: {text}")
+            self.statusLabel.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     def _on_instance_log(self, level: str, message: str) -> None:
         """过滤实例日志"""

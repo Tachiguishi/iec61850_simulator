@@ -17,7 +17,8 @@ from loguru import logger
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QObject, QThread
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QStackedWidget, QLabel, QMessageBox, QFileDialog, QProgressDialog
+    QStackedWidget, QLabel, QMessageBox, QFileDialog, QProgressDialog,
+    QDialog, QFormLayout, QLineEdit, QSpinBox, QCheckBox, QDialogButtonBox
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -103,6 +104,63 @@ class _ModelLoadWorker(QObject):
             self.finished.emit(done, total)
 
 
+class _ServerConfigDialog(QDialog):
+    """服务器配置编辑对话框"""
+
+    def __init__(self, config: ServerConfig, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("服务器配置")
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.ip_input = QLineEdit(config.ip_address)
+        form.addRow("IP地址:", self.ip_input)
+
+        self.port_input = QSpinBox()
+        self.port_input.setRange(1, 65535)
+        self.port_input.setValue(config.port)
+        form.addRow("端口:", self.port_input)
+
+        self.max_conn_input = QSpinBox()
+        self.max_conn_input.setRange(1, 100)
+        self.max_conn_input.setValue(config.max_connections)
+        form.addRow("最大连接:", self.max_conn_input)
+
+        self.update_interval_input = QSpinBox()
+        self.update_interval_input.setRange(100, 10000)
+        self.update_interval_input.setSingleStep(100)
+        self.update_interval_input.setValue(config.update_interval_ms)
+        form.addRow("更新间隔(ms):", self.update_interval_input)
+
+        self.random_values_check = QCheckBox("启用随机值仿真")
+        self.random_values_check.setChecked(config.enable_random_values)
+        form.addRow("", self.random_values_check)
+
+        self.reporting_check = QCheckBox("启用报告功能")
+        self.reporting_check.setChecked(config.enable_reporting)
+        form.addRow("", self.reporting_check)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_config(self) -> dict:
+        return {
+            "ip_address": self.ip_input.text().strip() or "0.0.0.0",
+            "port": self.port_input.value(),
+            "max_connections": self.max_conn_input.value(),
+            "update_interval_ms": self.update_interval_input.value(),
+            "enable_random_values": self.random_values_check.isChecked(),
+            "enable_reporting": self.reporting_check.isChecked(),
+        }
+
+
 class MultiServerPanel(QWidget):
     """
     多实例服务器面板
@@ -177,7 +235,7 @@ class MultiServerPanel(QWidget):
         left_layout.addWidget(self.stats_label)
         
         left_panel.setMinimumWidth(250)
-        left_panel.setMaximumWidth(350)
+        left_panel.setMaximumWidth(360)
         
         # 右侧：实例详情（使用StackedWidget切换不同实例的配置界面）
         self.detail_stack = QStackedWidget()
@@ -190,19 +248,27 @@ class MultiServerPanel(QWidget):
         empty_label.setStyleSheet("color: #888; font-size: 14px;")
         empty_layout.addWidget(empty_label)
         self.detail_stack.addWidget(empty_page)
+
+        # 共享详情面板（仅创建一个）
+        self.shared_panel = ServerPanel(self.config, self)
+        self.shared_panel.model_loaded.connect(self._on_model_loaded)
+        self.shared_panel.log_message.connect(
+            lambda level, msg: self.log_message.emit(level, msg)
+        )
+        self.detail_stack.addWidget(self.shared_panel)
         
         # 分割器
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
         splitter.addWidget(self.detail_stack)
-        splitter.setSizes([320, 720])
+        splitter.setSizes([360, 720])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         
         layout.addWidget(splitter)
         
-        # 实例面板映射
-        self._instance_panels: Dict[str, ServerPanel] = {}
+        # 默认显示空白页
+        self.detail_stack.setCurrentIndex(0)
     
     def _connect_signals(self):
         """连接信号"""
@@ -210,6 +276,7 @@ class MultiServerPanel(QWidget):
         self.instance_list.instance_removed.connect(self._on_remove_instance)
         self.instance_list.instance_started.connect(self._on_start_instance)
         self.instance_list.instance_stopped.connect(self._on_stop_instance)
+        self.instance_list.instance_config_requested.connect(self._on_config_instance)
         self.instance_list.instance_selected.connect(self._on_select_instance)
     
     # =========================================================================
@@ -249,18 +316,58 @@ class MultiServerPanel(QWidget):
     def _on_stop_instance(self, instance_id: str):
         """停止实例"""
         self.instance_manager.stop_instance(instance_id)
+
+    def _on_config_instance(self, instance_id: str):
+        """配置实例"""
+        instance = self.instance_manager.get_instance(instance_id)
+        if not instance:
+            return
+
+        dialog = _ServerConfigDialog(instance.config, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_config = dialog.get_config()
+        instance.config.ip_address = new_config["ip_address"]
+        instance.config.port = new_config["port"]
+        instance.config.max_connections = new_config["max_connections"]
+        instance.config.update_interval_ms = new_config["update_interval_ms"]
+        instance.config.enable_random_values = new_config["enable_random_values"]
+        instance.config.enable_reporting = new_config["enable_reporting"]
+
+        instance.proxy.config.ip_address = new_config["ip_address"]
+        instance.proxy.config.port = new_config["port"]
+        instance.proxy.config.max_connections = new_config["max_connections"]
+        instance.proxy.config.update_interval_ms = new_config["update_interval_ms"]
+        instance.proxy.config.enable_random_values = new_config["enable_random_values"]
+        instance.proxy.config.enable_reporting = new_config["enable_reporting"]
+
+        self.instance_list.update_instance_details(
+            instance_id,
+            f"{instance.config.ip_address}:{instance.config.port}"
+        )
+
+        if instance.state == ServerState.RUNNING:
+            self.log_message.emit("warning", f"实例 {instance.name} 正在运行，配置修改将在下次启动时完全生效")
+        else:
+            self.log_message.emit("info", f"实例 {instance.name} 配置已更新")
     
     def _on_select_instance(self, instance_id: str):
         """选择实例"""
         self._current_instance_id = instance_id
-        
-        # 切换详情面板
-        panel = self._instance_panels.get(instance_id)
-        if panel:
-            self.detail_stack.setCurrentWidget(panel)
-            instance = self.instance_manager.get_instance(instance_id)
-            if instance:
-                panel.set_ied(instance.ied)
+
+        instance = self.instance_manager.get_instance(instance_id)
+        if not instance:
+            self.detail_stack.setCurrentIndex(0)
+            return
+
+        self.shared_panel.bind_instance(
+            server_proxy=instance.proxy,
+            instance_id=instance.id,
+            ied=instance.ied,
+            state=instance.state,
+        )
+        self.detail_stack.setCurrentWidget(self.shared_panel)
     
     # =========================================================================
     # 实例管理器回调
@@ -276,17 +383,13 @@ class MultiServerPanel(QWidget):
             details
         )
         self._update_stats()
+        if self._current_instance_id is None:
+            self.instance_list.select_instance(instance.id)
     
     def _on_instance_removed(self, instance_id: str):
         """实例移除回调"""
         self.instance_list.remove_instance(instance_id)
-        
-        # 移除面板
-        panel = self._instance_panels.pop(instance_id, None)
-        if panel:
-            self.detail_stack.removeWidget(panel)
-            panel.deleteLater()
-        
+
         # 如果移除的是当前选中的，切换到空白页
         if self._current_instance_id == instance_id:
             self._current_instance_id = None
@@ -309,43 +412,11 @@ class MultiServerPanel(QWidget):
     # 面板管理
     # =========================================================================
     
-    def _create_instance_panel(self, instance: ServerInstance):
-        """为实例创建配置面板"""
-        # 创建单独的配置副本
-        instance_config = dict(self.config)
-        instance_config["server"] = {
-            "network": {
-                "ip_address": instance.config.ip_address,
-                "port": instance.config.port,
-                "max_connections": instance.config.max_connections,
-            },
-            "simulation": {
-                "update_interval_ms": instance.config.update_interval_ms,
-                "enable_random_values": instance.config.enable_random_values,
-            },
-            "reporting": {
-                "enabled": instance.config.enable_reporting,
-            }
-        }
-        
-        panel = ServerPanel(instance_config, self)
-        panel.server = instance.proxy
-        panel.set_instance_id(instance.id)
-        panel.set_ied(instance.ied)
-        panel.model_loaded.connect(lambda ied, iid=instance.id: self._on_model_loaded(iid, ied))
-        panel.log_message.connect(
-            lambda level, msg, iid=instance.id: self._on_instance_log(iid, level, msg)
-        )
-        
-        self._instance_panels[instance.id] = panel
-        self.detail_stack.addWidget(panel)
-        
-        # 自动选中新创建的实例
-        self.instance_list.select_instance(instance.id)
-
-    def _on_model_loaded(self, instance_id: str, ied) -> None:
+    def _on_model_loaded(self, ied) -> None:
         """同步面板加载的IED到实例缓存"""
-        instance = self.instance_manager.get_instance(instance_id)
+        if not self._current_instance_id:
+            return
+        instance = self.instance_manager.get_instance(self._current_instance_id)
         if instance:
             instance.ied = ied
     
@@ -398,9 +469,8 @@ class MultiServerPanel(QWidget):
     
     def refresh_data(self):
         """刷新当前选中实例的数据（兼容单实例接口）"""
-        panel = self._instance_panels.get(self._current_instance_id)
-        if panel and hasattr(panel, 'refresh_data'):
-            panel.refresh_data()
+        if self._current_instance_id and hasattr(self.shared_panel, 'refresh_data'):
+            self.shared_panel.refresh_data()
     
     def save_instances(self, file_path: str) -> bool:
         """保存所有实例配置到文件"""
@@ -409,10 +479,10 @@ class MultiServerPanel(QWidget):
     def load_instances(self, file_path: str, auto_start: bool = False) -> int:
         """从文件加载实例配置"""
         count = self.instance_manager.load_from_file(file_path, auto_start)
-        # 为加载的实例创建面板
-        for instance in self.instance_manager.get_all_instances():
-            if instance.id not in self._instance_panels:
-                self._create_instance_panel(instance)
+        if self._current_instance_id is None:
+            instances = self.instance_manager.get_all_instances()
+            if instances:
+                self.instance_list.select_instance(instances[0].id)
         return count
 
 
@@ -480,7 +550,6 @@ class MultiServerPanel(QWidget):
 
                 instance.ied = ied
                 instance.scl_file_path = str(file_path)
-                self._create_instance_panel(instance)
                 instances.append(instance)
                 current_port += 1
             except Exception as exc:
