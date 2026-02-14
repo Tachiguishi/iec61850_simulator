@@ -308,79 +308,13 @@ class ServerInstanceManager:
         """获取运行中的实例数量"""
         return len(self.get_running_instances())
     
-    # =========================================================================
-    # 批量导入
-    # =========================================================================
-    
-    def import_from_scd(
-        self,
-        scd_path: str | Path,
-        base_port: int = 102,
-        auto_start: bool = False
-    ) -> List[ServerInstance]:
-        """
-        从SCD文件批量导入IED，为每个IED创建一个服务器实例
-        
-        Args:
-            scd_path: SCD文件路径
-            base_port: 起始端口号，后续IED依次递增
-            auto_start: 是否自动启动导入的实例
-        
-        Returns:
-            创建的实例列表
-        """
-        parser = SCDParser()
-        ieds = parser.parse(scd_path)
-        
-        if not ieds:
-            logger.warning(f"SCD文件中没有找到IED: {scd_path}")
-            return []
-        
-        created_instances = []
-        current_port = base_port
-        
-        for ied in ieds:
-            try:
-                # 检查端口是否被占用
-                while self._is_port_in_use(current_port):
-                    current_port += 1
-                
-                config = ServerConfig(
-                    ip_address="0.0.0.0",
-                    port=current_port,
-                )
-                
-                instance = self.create_instance(
-                    name=ied.name,
-                    config=config,
-                )
-                
-                # 加载IED模型
-                instance.ied = ied
-                instance.scl_file_path = str(scd_path)
-                instance.proxy.load_model(instance.id, ied)
-                
-                if auto_start:
-                    self.start_instance(instance.id)
-                
-                created_instances.append(instance)
-                current_port += 1
-                
-                self._log(instance.id, "info", f"从SCD导入IED '{ied.name}' (端口: {instance.config.port})")
-                
-            except Exception as e:
-                logger.error(f"导入IED '{ied.name}' 失败: {e}")
-                continue
-        
-        logger.info(f"从 {scd_path} 导入了 {len(created_instances)} 个IED")
-        return created_instances
-    
-    def _is_port_in_use(self, port: int) -> bool:
+    def count_server_in_use(self, ip_address: str) -> int:
         """检查端口是否被实例使用"""
+        count = 0
         for inst in self._instances.values():
-            if inst.config.port == port:
-                return True
-        return False
+            if inst.config.ip_address == ip_address:
+                count += 1
+        return count
     
     # =========================================================================
     # 内部方法

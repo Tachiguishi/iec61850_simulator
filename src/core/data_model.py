@@ -964,6 +964,13 @@ class IED(IEC61850Element):
 					for da in do.attributes.values():
 						refs.append(da.reference)
 		return refs
+
+	def get_listen_ip(self, default: str = "0.0.0.0") -> str:
+		"""从通信参数中提取监听IP，缺失时返回默认值"""
+		for ap in self.access_points.values():
+			if ap.mms_addresses and ap.mms_addresses.ip_address:
+				return ap.mms_addresses.ip_address
+		return default
 	
 	def to_dict(self) -> Dict:
 		"""转换为字典"""

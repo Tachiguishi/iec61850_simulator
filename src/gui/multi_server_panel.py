@@ -531,15 +531,14 @@ class MultiServerPanel(QWidget):
             return
 
         instances: list[ServerInstance] = []
-        current_port = base_port
 
         for ied in ieds:
             try:
-                while self.instance_manager._is_port_in_use(current_port):
-                    current_port += 1
+                listen_ip = ied.get_listen_ip()
+                current_port = base_port + self.instance_manager.count_server_in_use(listen_ip)
 
                 config = ServerConfig(
-                    ip_address="0.0.0.0",
+                    ip_address=listen_ip,
                     port=current_port,
                 )
 
@@ -551,7 +550,6 @@ class MultiServerPanel(QWidget):
                 instance.ied = ied
                 instance.scl_file_path = str(file_path)
                 instances.append(instance)
-                current_port += 1
             except Exception as exc:
                 self.log_message.emit("error", f"导入IED失败: {exc}")
                 continue
