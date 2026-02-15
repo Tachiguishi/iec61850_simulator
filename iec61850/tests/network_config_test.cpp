@@ -4,6 +4,8 @@
 #include "logger.hpp"
 
 namespace {
+const std::string test_interface = "enp0s13f0u1c2"; // 请根据测试环境修改为有效的接口名称
+
 class LoggingEnvironment final : public ::testing::Environment {
 public:
 	void SetUp() override {
@@ -39,8 +41,7 @@ TEST(NetworkConfig, GetNetworkInterfacesExcludesLoopback) {
 }
 
 TEST(NetworkConfig, SetIpAddressAndRemovesIpSuccessfully) {
-	const std::string test_interface = "enp0s13f0u1c2"; // 请根据测试环境修改为有效的接口名称
-	const std::string test_ip = "172.16.1.100";
+	const std::string test_ip = "172.16.1.99";
 	const int prefix_len = 24;
 	const std::string test_label = "test_label";
 
@@ -73,16 +74,15 @@ TEST(NetworkConfig, SetIpAddressAndRemovesIpSuccessfully) {
 }
 
 TEST(NetworkConfig, SetIpAddressAndRemoveByLabelSuccessfully) {
-	const std::string test_interface = "enp0s13f0u1c2"; // 请根据测试环境修改为有效的接口名称
 	const std::string test_ip1 = "172.16.1.100";
 	const std::string test_ip2 = "172.16.1.101";
 	const std::string test_ip3 = "172.16.1.102";
-	const std::string test_label = "test_label";
+	const std::string test_label = "iec61850";
 	const int prefix_len = 24;
 
-	ASSERT_TRUE(network::add_ip_address(test_interface, test_ip1, prefix_len, test_label));
-	ASSERT_TRUE(network::add_ip_address(test_interface, test_ip2, prefix_len, test_label));
-	ASSERT_TRUE(network::add_ip_address(test_interface, test_ip3, prefix_len, test_label));
+	ASSERT_TRUE(network::add_ip_address(test_interface, test_ip1, prefix_len));
+	ASSERT_TRUE(network::add_ip_address(test_interface, test_ip2, prefix_len));
+	ASSERT_TRUE(network::add_ip_address(test_interface, test_ip3, prefix_len));
 
 	// 验证IP已添加
 	auto interfaces = network::get_network_interfaces();
@@ -100,7 +100,7 @@ TEST(NetworkConfig, SetIpAddressAndRemoveByLabelSuccessfully) {
 	ASSERT_EQ(found_count, 3) << "Not all IP addresses found on interface after addition";
 
 	// 通过标签移除IP
-	EXPECT_TRUE(network::remove_by_label(test_interface, test_label)) << "Failed to remove IP addresses by label";
+	EXPECT_TRUE(network::remove_by_label(test_interface)) << "Failed to remove IP addresses by label";
 }
 
 TEST(NetworkConfig, ShouldConfigureIpReturnsFalseForInvalidAddresses) {

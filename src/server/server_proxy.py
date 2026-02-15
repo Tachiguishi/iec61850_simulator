@@ -53,64 +53,53 @@ class IEC61850ServerProxy:
 
     def __init__(self, config: Optional[ServerConfig] = None, socket_path: str = "", timeout_ms: int = 3000):
         self.config = config or ServerConfig()
-        self._states: Dict[str, ServerState] = {}
+        self._state: ServerState = ServerState.STOPPED
 
         # 将毫秒转换为秒传递给 UDSMessageClient
         self._ipc = UDSMessageClient(socket_path or "/tmp/iec61850_simulator.sock", timeout_ms / 1000.0)
 
-        self._state_callbacks: Dict[str, Callable[[ServerState], None]] = {}
-        self._connection_callbacks: Dict[str, Callable[[str, bool], None]] = {}
-        self._data_callbacks: Dict[str, Callable[[str, Any, Any], None]] = {}
-        self._log_callbacks: Dict[str, Callable[[str, str], None]] = {}
+        self._state_callback: Optional[Callable[[ServerState], None]] = None
+        self._connection_callback: Optional[Callable[[str, bool], None]] = None
+        self._data_callback: Optional[Callable[[str, Any, Any], None]] = None
+        self._log_callback: Optional[Callable[[str, str], None]] = None
 
     # =====================================================================
     # Callback registration
     # =====================================================================
 
     def on_state_change(self, instance_id: str, callback: Callable[[ServerState], None]) -> None:
-        self._state_callbacks[instance_id] = callback
+        self._state_callback = callback
 
     def off_state_change(self, instance_id: str, callback: Callable[[ServerState], None]) -> None:
-        registered = self._state_callbacks.get(instance_id)
-        if registered is callback:
-            del self._state_callbacks[instance_id]
+        if self._state_callback is callback:
+            self._state_callback = None
 
     def on_connection_change(self, instance_id: str, callback: Callable[[str, bool], None]) -> None:
-        self._connection_callbacks[instance_id] = callback
+        self._connection_callback = callback
 
     def off_connection_change(self, instance_id: str, callback: Callable[[str, bool], None]) -> None:
-        registered = self._connection_callbacks.get(instance_id)
-        if registered is callback:
-            del self._connection_callbacks[instance_id]
+        if self._connection_callback is callback:
+            self._connection_callback = None
 
     def on_data_change(self, instance_id: str, callback: Callable[[str, Any, Any], None]) -> None:
-        self._data_callbacks[instance_id] = callback
+        self._data_callback = callback
 
     def off_data_change(self, instance_id: str, callback: Callable[[str, Any, Any], None]) -> None:
-        registered = self._data_callbacks.get(instance_id)
-        if registered is callback:
-            del self._data_callbacks[instance_id]
+        if self._data_callback is callback:
+            self._data_callback = None
 
     def on_log(self, instance_id: str, callback: Callable[[str, str], None]) -> None:
-        self._log_callbacks[instance_id] = callback
+        self._log_callback = callback
 
     def off_log(self, instance_id: str, callback: Callable[[str, str], None]) -> None:
-        registered = self._log_callbacks.get(instance_id)
-        if registered is callback:
-            del self._log_callbacks[instance_id]
+        if self._log_callback is callback:
+            self._log_callback = None
 
     def remove_callback(self, instance_id: str) -> None:
-        if instance_id in self._state_callbacks:
-            del self._state_callbacks[instance_id]
-
-        if instance_id in self._connection_callbacks:
-            del self._connection_callbacks[instance_id]
-
-        if instance_id in self._data_callbacks:
-            del self._data_callbacks[instance_id]
-        
-        if instance_id in self._log_callbacks:
-            del self._log_callbacks[instance_id]
+        self._state_callback = None
+        self._connection_callback = None
+        self._data_callback = None
+        self._log_callback = None
 
     def close(self) -> None:
         """释放IPC连接资源"""
@@ -121,7 +110,7 @@ class IEC61850ServerProxy:
     # =====================================================================
 
     def start(self, instance_id: str, ied: Optional[IED] = None) -> bool:
-        if self._states.get(instance_id, ServerState.STOPPED) == ServerState.RUNNING:
+        if self._state == ServerState.RUNNING:
             self._log(instance_id, "warning", "Server already running")
             return False
 
@@ -131,25 +120,20 @@ class IEC61850ServerProxy:
 
         self._set_state(instance_id, ServerState.STARTING)
         try:
-            # 从 IED 通信参数中获取 IP 地址，如果有的话覆盖配置
             effective_ip = self.config.ip_address
-            if ied:
-                for ap in ied.access_points.values():
-                    if ap.mms_addresses and ap.mms_addresses.ip_address:
-                        effective_ip = ap.mms_addresses.ip_address
-                        self._log(instance_id, "info", f"Using IP from SCD: {effective_ip}")
-                        break
 
             payload = {
                 "instance_id": instance_id,
                 "config": asdict(self.config),
-                "model": ied.to_dict() if ied else {},
             }
-            # 如果从 SCD 获取到 IP，覆盖 config 中的 ip_address
-            if effective_ip != self.config.ip_address:
-                payload["config"]["ip_address"] = effective_ip
-            
-            self._ipc.request("server.start", payload)
+
+            response = self._ipc.request("server.start", payload)
+            if not response.data.get("success", False):
+                backend_instance_id = response.data.get("instance_id", instance_id)
+                raise IPCError(
+                    f"Backend failed to start instance {backend_instance_id}"
+                )
+
             self._set_state(instance_id, ServerState.RUNNING)
             self._log(instance_id, "info", f"Server started on {effective_ip}:{self.config.port}")
             return True
@@ -159,7 +143,7 @@ class IEC61850ServerProxy:
             return False
 
     def stop(self, instance_id: str) -> bool:
-        if self._states.get(instance_id, ServerState.STOPPED) == ServerState.STOPPED:
+        if self._state == ServerState.STOPPED:
             return True
 
         self._set_state(instance_id, ServerState.STOPPING)
@@ -192,9 +176,8 @@ class IEC61850ServerProxy:
             response = self._ipc.request("server.set_data_value", {"instance_id": instance_id, "reference": reference, "value": value})
             if not response.data.get("success", False):
                 raise IPCError("Backend failed to set data value")
-            callback = self._data_callbacks.get(instance_id)
-            if callback:
-                callback(reference, old_value, value)
+            if self._data_callback:
+                self._data_callback(reference, old_value, value)
         except IPCError as exc:
             self._log(instance_id, "error", f"Set value failed: {exc}")
 
@@ -262,13 +245,13 @@ class IEC61850ServerProxy:
     # =====================================================================
 
     def _set_state(self, instance_id: str, state: ServerState) -> None:
-        self._states[instance_id] = state
-        if instance_id in self._state_callbacks:
-            self._state_callbacks[instance_id](state)
+        self._state = state
+        if self._state_callback:
+            self._state_callback(state)
 
     def _log(self, instance_id: str, level: str, message: str) -> None:
-        if instance_id in self._log_callbacks:
-            self._log_callbacks[instance_id](level, message)
+        if self._log_callback:
+            self._log_callback(level, message)
         if level == "error":
             logger.error(message)
         elif level == "warning":

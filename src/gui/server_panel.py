@@ -67,11 +67,9 @@ class ServerPanel(QWidget):
         uic.loadUi(UI_DIR / "server_panel.ui", self)
         
         self._init_ui()
-        self._init_server()
         self._connect_signals()
         self._setup_timers()
 
-        self._state_changed_signal.connect(self._on_server_state_changed)
         self._connection_changed_signal.connect(self._on_connection_changed)
         self._data_changed_signal.connect(self._on_data_changed)
         self._instance_log_signal.connect(self._on_instance_log)
@@ -84,30 +82,11 @@ class ServerPanel(QWidget):
         state: Optional[ServerState] = None,
     ) -> None:
         """绑定到指定实例（用于多实例共享单个面板）"""
-        old_server = self.server
-        old_instance_id = self._instance_id
-
-        if old_server and self._state_callback:
-            self._unregister_callbacks(server=old_server, instance_id=old_instance_id)
-
         self.server = server_proxy
         self._instance_id = instance_id
-        self._register_callbacks()
         self.set_ied(ied)
 
-        if state:
-            self._on_server_state_changed(state)
 
-    def set_instance_id(self, instance_id: str) -> None:
-        """设置当前实例ID"""
-        if not instance_id or instance_id == self._instance_id:
-            return
-        if self.server:
-            self._unregister_callbacks()
-        self._instance_id = instance_id
-        if self.server:
-            self._register_callbacks()
-    
     def _init_ui(self):
         """初始化UI附加设置"""
         # 设置分割器大小（仅右侧详情面板）
@@ -147,60 +126,6 @@ class ServerPanel(QWidget):
         # 数据集信号
         self.datasetList.currentItemChanged.connect(self._on_dataset_selected)
     
-    def _init_server(self):
-        """初始化服务器"""
-        server_config = self.config.get("server", {})
-        
-        config = ServerConfig(
-            ip_address=server_config.get("network", {}).get("ip_address", "0.0.0.0"),
-            port=server_config.get("network", {}).get("port", 102),
-            max_connections=server_config.get("network", {}).get("max_connections", 10),
-            update_interval_ms=server_config.get("simulation", {}).get("update_interval_ms", 1000),
-            enable_random_values=server_config.get("simulation", {}).get("enable_random_values", False),
-            enable_reporting=server_config.get("reporting", {}).get("enabled", True),
-        )
-        
-        ipc_config = self.config.get("ipc", {})
-        socket_path = ipc_config.get("socket_path", "/tmp/iec61850_simulator.sock")
-        timeout_ms = ipc_config.get("request_timeout_ms", 3000)
-
-        self.server = IEC61850ServerProxy(config, socket_path, timeout_ms)
-        
-        # 连接回调
-        self._register_callbacks()
-        
-    def _register_callbacks(self) -> None:
-        """注册实例回调"""
-        if not self.server:
-            return
-        self._state_callback = lambda state: self._state_changed_signal.emit(state)
-        self._connection_callback = lambda client_id, connected: self._connection_changed_signal.emit(client_id, connected)
-        self._data_callback = lambda reference, old_value, new_value: self._data_changed_signal.emit(reference, old_value, new_value)
-        self._log_callback = lambda level, message: self._instance_log_signal.emit(level, message)
-        self.server.on_state_change(self._instance_id, self._state_callback)
-        self.server.on_connection_change(self._instance_id, self._connection_callback)
-        self.server.on_data_change(self._instance_id, self._data_callback)
-        self.server.on_log(self._instance_id, self._log_callback)
-
-    def _unregister_callbacks(
-        self,
-        server: Optional[IEC61850ServerProxy] = None,
-        instance_id: Optional[str] = None,
-    ) -> None:
-        """注销实例回调"""
-        target_server = server or self.server
-        target_instance_id = instance_id or self._instance_id
-        if not target_server:
-            return
-        if self._state_callback:
-            target_server.off_state_change(target_instance_id, self._state_callback)
-        if self._connection_callback:
-            target_server.off_connection_change(target_instance_id, self._connection_callback)
-        if self._data_callback:
-            target_server.off_data_change(target_instance_id, self._data_callback)
-        if self._log_callback:
-            target_server.off_log(target_instance_id, self._log_callback)
-        
     def _setup_timers(self):
         """设置定时器"""
         # 数据刷新定时器
@@ -210,37 +135,7 @@ class ServerPanel(QWidget):
         # 客户端列表刷新定时器
         self.client_timer = QTimer(self)
         self.client_timer.timeout.connect(self._refresh_client_list)
-    
-    # ========================================================================
-    # 服务控制
-    # ========================================================================
-    
-    def start_server(self) -> bool:
-        """启动服务器"""
-        if not self.server:
-            return False
-        
-        # 确保有IED
-        if not self._ied:
-            self.log_message.emit("warning", "未加载数据模型，无法启动服务")
-            return False
 
-        if self.server.start(self._instance_id, self._ied):
-            # 启动定时器
-            self.refresh_timer.start(500)
-            self.client_timer.start(2000)
-            
-            return True
-        return False
-    
-    def stop_server(self):
-        """停止服务器"""
-        if self.server:
-            self.server.stop(self._instance_id)
-            # 停止定时器
-            self.refresh_timer.stop()
-            self.client_timer.stop()
-    
     # ========================================================================
     # 数据模型管理
     # ========================================================================
@@ -328,20 +223,6 @@ class ServerPanel(QWidget):
             ))
             self.connectionTable.setItem(i, 2, QTableWidgetItem("已连接"))
     
-    def _on_server_state_changed(self, state: ServerState):
-        """服务器状态变化回调"""
-        state_text = {
-            ServerState.STOPPED: ("已停止", "#6c757d"),
-            ServerState.STARTING: ("正在启动...", "#ffc107"),
-            ServerState.RUNNING: ("运行中", "#28a745"),
-            ServerState.STOPPING: ("正在停止...", "#ffc107"),
-            ServerState.ERROR: ("错误", "#dc3545"),
-        }
-        
-        text, color = state_text.get(state, ("未知", "#6c757d"))
-        if hasattr(self, "statusLabel"):
-            self.statusLabel.setText(f"状态: {text}")
-            self.statusLabel.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     def _on_instance_log(self, level: str, message: str) -> None:
         """过滤实例日志"""

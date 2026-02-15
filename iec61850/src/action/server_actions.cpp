@@ -218,20 +218,22 @@ public:
         }
 
         if (network::should_configure_ip(ip_address) && !ctx.context.global_interface_name.empty()) {
-            std::string label = ctx.context.global_interface_name + ":iec" + instance_id;
-            if (network::add_ip_address(ctx.context.global_interface_name, ip_address, ctx.context.global_prefix_len, label)) {
+            if (network::add_ip_address(ctx.context.global_interface_name, ip_address, ctx.context.global_prefix_len)) {
                 inst->ip_configured = true;
                 LOG4CPLUS_INFO(server_logger(), "Configured IP " << ip_address << " on " << ctx.context.global_interface_name);
             } else {
                 LOG4CPLUS_WARN(server_logger(), "Failed to configure IP " << ip_address << " on " << ctx.context.global_interface_name);
             }
         }
+        else{
+            LOG4CPLUS_INFO(server_logger(), "Using IP " << ip_address << " without additional configuration");
+        }
 
         LOG4CPLUS_INFO(server_logger(), "Starting server instance " << instance_id << " on " << ip_address << ":" << port);
         IedServer_start(inst->server, port);
         inst->running = IedServer_isRunning(inst->server);
 
-        LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port);
+        LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port << " with state " << (inst->running ? "RUNNING" : "FAILED"));
 
         pk.pack("payload");
         pk.pack_map(2);
@@ -593,6 +595,8 @@ public:
         if (auto prefix_obj = ipc::codec::find_key(ctx.payload, "prefix_len")) {
             prefix_len = static_cast<int>(ipc::codec::as_int64(*prefix_obj, 24));
         }
+
+        network::remove_by_label(ctx.context.global_interface_name);
 
         ctx.context.global_interface_name = interface_name;
         ctx.context.global_prefix_len = prefix_len;

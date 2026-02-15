@@ -10,7 +10,6 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -19,7 +18,6 @@ from loguru import logger
 
 from core.data_model import IED
 from core.data_model_manager import DataModelManager
-from core.scd_parser import SCDParser
 from server.server_proxy import IEC61850ServerProxy, ServerConfig, ServerState
 
 

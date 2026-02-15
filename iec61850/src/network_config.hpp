@@ -31,7 +31,7 @@ std::vector<InterfaceInfo> get_network_interfaces();
 bool add_ip_address(const std::string& interface_name, 
                    const std::string& ip_address, 
                    int prefix_len = 24,
-                   const std::string& label = "");
+                   const std::string& label = "iec61850");
 
 /**
  * 删除IP地址从指定网卡
@@ -51,7 +51,7 @@ bool remove_ip_address(const std::string& interface_name,
  * @return 成功返回true
  */
 bool remove_by_label(const std::string& interface_name,
-                     const std::string& label);
+                     const std::string& label = "iec61850");
 
 /**
  * 检查IP地址是否需要配置（不是0.0.0.0或127.*）
