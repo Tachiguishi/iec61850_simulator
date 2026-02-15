@@ -62,11 +62,11 @@ class ServerInstanceManager:
         self._timeout_ms = timeout_ms
         self._instances: Dict[str, ServerInstance] = {}
         
-        # 回调列表
-        self._instance_added_callbacks: List[Callable[[ServerInstance], None]] = []
-        self._instance_removed_callbacks: List[Callable[[str], None]] = []
-        self._instance_state_callbacks: List[Callable[[str, ServerState], None]] = []
-        self._log_callbacks: List[Callable[[str, str, str], None]] = []  # instance_id, level, message
+        # 单回调（每类仅维护一个订阅者）
+        self._instance_added_callback: Optional[Callable[[ServerInstance], None]] = None
+        self._instance_removed_callback: Optional[Callable[[str], None]] = None
+        self._instance_state_callback: Optional[Callable[[str, ServerState], None]] = None
+        self._log_callback: Optional[Callable[[str, str, str], None]] = None  # instance_id, level, message
     
     # =========================================================================
     # 回调注册
@@ -74,19 +74,19 @@ class ServerInstanceManager:
     
     def on_instance_added(self, callback: Callable[[ServerInstance], None]) -> None:
         """注册实例添加回调"""
-        self._instance_added_callbacks.append(callback)
+        self._instance_added_callback = callback
     
     def on_instance_removed(self, callback: Callable[[str], None]) -> None:
         """注册实例移除回调"""
-        self._instance_removed_callbacks.append(callback)
+        self._instance_removed_callback = callback
     
     def on_instance_state_change(self, callback: Callable[[str, ServerState], None]) -> None:
         """注册实例状态变化回调"""
-        self._instance_state_callbacks.append(callback)
+        self._instance_state_callback = callback
     
     def on_log(self, callback: Callable[[str, str, str], None]) -> None:
         """注册日志回调"""
-        self._log_callbacks.append(callback)
+        self._log_callback = callback
     
     # =========================================================================
     # 实例管理
@@ -125,14 +125,14 @@ class ServerInstanceManager:
         # 转发状态变化回调
         def on_state_change(state: ServerState):
             instance.state = state
-            for callback in self._instance_state_callbacks:
-                callback(instance_id, state)
+            if self._instance_state_callback:
+                self._instance_state_callback(instance_id, state)
         proxy.on_state_change(instance_id, on_state_change)
         
         # 转发日志回调
         def on_log(level: str, message: str):
-            for callback in self._log_callbacks:
-                callback(instance_id, level, message)
+            if self._log_callback:
+                self._log_callback(instance_id, level, message)
         proxy.on_log(instance_id, on_log)
         
         instance = ServerInstance(
@@ -148,8 +148,8 @@ class ServerInstanceManager:
         self._instances[instance_id] = instance
         
         # 触发回调
-        for callback in self._instance_added_callbacks:
-            callback(instance)
+        if self._instance_added_callback:
+            self._instance_added_callback(instance)
         
         self._log(instance_id, "info", f"实例 '{name}' 已创建 (ID: {instance_id})")
         
@@ -184,8 +184,8 @@ class ServerInstanceManager:
         del self._instances[instance_id]
         
         # 触发回调
-        for callback in self._instance_removed_callbacks:
-            callback(instance_id)
+        if self._instance_removed_callback:
+            self._instance_removed_callback(instance_id)
         
         self._log(instance_id, "info", f"实例 '{instance.name}' 已移除")
         
@@ -320,8 +320,8 @@ class ServerInstanceManager:
     
     def _log(self, instance_id: str, level: str, message: str) -> None:
         """记录日志"""
-        for callback in self._log_callbacks:
-            callback(instance_id, level, message)
+        if self._log_callback:
+            self._log_callback(instance_id, level, message)
         
         if level == "error":
             logger.error(f"[{instance_id}] {message}")
