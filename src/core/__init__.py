@@ -8,7 +8,9 @@ IEC61850 Simulator Package
 客户端模式: 连接IED设备，读写数据点
 """
 
-__version__ = "1.0.0"
+from config.constants import APP_VERSION, APP_NAME, APP_ORG_NAME
+
+__version__ = APP_VERSION
 __author__ = "IEC61850 Simulator Team"
 
 from .data_model import (

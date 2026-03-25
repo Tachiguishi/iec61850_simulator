@@ -122,6 +122,7 @@ class ServerPanel(QWidget):
         # 数据树信号
         self.data_tree.value_changed.connect(self._on_value_changed)
         self.data_tree.item_selected.connect(self._on_item_selected)
+        self.data_tree.refresh_requested.connect(self._on_refresh_requested)
         
         # 数据集信号
         self.datasetList.currentItemChanged.connect(self._on_dataset_selected)
@@ -206,7 +207,25 @@ class ServerPanel(QWidget):
         references = self._ied.get_all_references()
         values = self.server.get_values(self._instance_id, references)
         if values:
+            self._sync_ied_values(values)
             self.data_tree.update_values(values)
+
+    def _on_refresh_requested(self):
+        """处理数据模型页刷新按钮"""
+        self._refresh_data_view()
+
+    def _sync_ied_values(self, values: Dict[str, Dict[str, Any]]) -> None:
+        """将后端读取的值同步回IED内存模型"""
+        if not self._ied:
+            return
+
+        for reference, value_info in values.items():
+            da = self._ied.get_data_attribute(reference)
+            if not da:
+                continue
+
+            da.value = value_info.get("value")
+            da.timestamp = datetime.now()
     
     def _refresh_client_list(self):
         """刷新客户端列表"""

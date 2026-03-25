@@ -1,0 +1,12 @@
+
+__all__ = [
+    "APP_NAME",
+    "APP_VERSION",
+    "APP_ORG_NAME",
+    "DEFAULT_SERVER_HOST",
+    "DEFAULT_PORT",
+    "DEFAULT_LOG_LEVEL",
+    "DEFAULT_LOG_FILE",
+    "LOG_ROTATION",
+    "LOG_RETENTION",
+]

@@ -17,7 +17,6 @@ IEC61850 Simulator
 """
 
 import sys
-import os
 import argparse
 from pathlib import Path
 
@@ -26,13 +25,14 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from loguru import logger
+import config.constants as constants
 
 
 def setup_logging(log_file: str = None, level: str = "DEBUG"):
     """配置日志"""
     # 移除默认处理器
     logger.remove()
-    
+
     # 控制台输出
     logger.add(
         sys.stderr,
@@ -50,8 +50,8 @@ def setup_logging(log_file: str = None, level: str = "DEBUG"):
             log_path / log_file,
             format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {module}:{function}:{line} - {message}",
             level=level,
-            rotation="10 MB",
-            retention="7 days",
+            rotation=constants.LOG_ROTATION,
+            retention=constants.LOG_RETENTION,
             compression="zip"
         )
 
@@ -59,15 +59,11 @@ def setup_logging(log_file: str = None, level: str = "DEBUG"):
 def run_gui(initial_mode: str = None):
     """运行GUI程序"""
     from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtCore import Qt
-    
-    # 高DPI支持
-    # Qt6中默认启用高DPI缩放
-    
+
     app = QApplication(sys.argv)
-    app.setApplicationName("IEC61850 Simulator")
-    app.setApplicationVersion("1.0.0")
-    app.setOrganizationName("IEC61850Simulator")
+    app.setApplicationName(constants.APP_NAME)
+    app.setApplicationVersion(constants.APP_VERSION)
+    app.setOrganizationName(constants.APP_ORG_NAME)
     
     # 设置样式
     app.setStyle("Fusion")
@@ -91,7 +87,7 @@ def run_gui(initial_mode: str = None):
     return app.exec()
 
 
-def run_headless_server(host: str = "0.0.0.0", port: int = 102):
+def run_headless_server(host: str = constants.DEFAULT_SERVER_HOST, port: int = constants.DEFAULT_PORT):
     """运行无界面服务器"""
     import signal
     import time
@@ -173,34 +169,34 @@ Examples:
     # 网络选项
     parser.add_argument(
         "-H", "--host",
-        default="0.0.0.0",
-        help="Host address (default: 0.0.0.0 for server, 127.0.0.1 for client)"
+        default=constants.DEFAULT_SERVER_HOST,
+        help=f"Host address (default: {constants.DEFAULT_SERVER_HOST} for server, 127.0.0.1 for client)"
     )
     parser.add_argument(
         "-p", "--port",
         type=int,
-        default=102,
-        help="Port number (default: 102)"
+        default=constants.DEFAULT_PORT,
+        help=f"Port number (default: {constants.DEFAULT_PORT})"
     )
     
     # 日志选项
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        default="INFO",
-        help="Log level (default: INFO)"
+        default=constants.DEFAULT_LOG_LEVEL,
+        help=f"Log level (default: {constants.DEFAULT_LOG_LEVEL})"
     )
     parser.add_argument(
         "--log-file",
-        default="simulator.log",
-        help="Log file name (default: simulator.log)"
+        default=constants.DEFAULT_LOG_FILE,
+        help=f"Log file name (default: {constants.DEFAULT_LOG_FILE})"
     )
     
     # 版本
     parser.add_argument(
         "--version", "-v",
         action="version",
-        version="IEC61850 Simulator v1.0.0"
+        version=f"{constants.APP_NAME} v{constants.APP_VERSION}"
     )
     
     args = parser.parse_args()
