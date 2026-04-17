@@ -1,12 +1,72 @@
 
 # 服务端
 
-## 载入Model
+## 基础流程
 
 ```mermaid
-graph TD;
-    A[开始] --> B{是否成功?};
-    B -- 是 --> C[结束];
-    B -- 否 --> D[重试];
-    D --> B;
+sequenceDiagram;
+    participant UI
+    participant Server
+    UI->>Server: 发送Model数据
+    Server->>UI: 载入完成
+    UI->>Server: 启动服务
+    Server->>UI: 服务启动完成
+    loop 连接状态变更
+        Server->>UI: 客户端连接状态
+    end
+    alt 请求单点数据
+        UI->>Server: 请求单点数据
+        Server->>UI: 返回单点数据
+    else 请求数据集数据
+        UI->>Server: 请求数据集数据
+        Server->>UI: 返回数据集数据
+    else 设定单点数据
+        UI->>Server: 设定单点数据
+        Server->>UI: 返回设定结果
+    end
+```
+
+## 数据变更联动
+
+# 客户端
+
+## 基础流程
+
+```mermaid
+sequenceDiagram;
+    participant UI
+    participant Client
+    UI->>Client: 服务器地址
+    Client->>UI: 连接服务器并载入模型
+    loop 连接状态变更
+        Client->>UI: 连接状态
+    end
+    alt 请求单点数据
+        UI->>Client: 请求单点数据
+        Client->>UI: 返回单点数据
+    else 请求数据集数据
+        UI->>Client: 请求数据集数据
+        Client->>UI: 返回数据集数据
+    else 请求定值数据
+        UI->>Client: 请求定值数据
+        Client->>UI: 返回定值数据
+    else 订阅Report控制块
+        UI->>Client: 订阅Report控制块
+        Client->>UI: Report控制块数据变更通知
+    else 设定单点数据
+        UI->>Client: 设定单点数据
+        Client->>UI: 返回设定结果
+    else 设定定值数据
+        UI->>Client: 设定定值数据
+        Client->>UI: 返回设定结果
+    else 取消订阅Report控制块
+        UI->>Client: 取消订阅Report控制块
+        Client->>UI: 取消订阅结果
+    else 控制命令
+        UI->>Client: 发送控制命令
+        Client->>UI: 返回控制结果
+    else 断开连接
+        UI->>Client: 断开连接
+        Client->>UI: 断开结果
+    end
 ```

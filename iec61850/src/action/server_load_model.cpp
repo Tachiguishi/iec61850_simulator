@@ -858,7 +858,7 @@ bool ServerLoadModelAction::handle(ActionContext& ctx, msgpack::packer<msgpack::
 
 		LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " loaded model (" << inst->ied_name << "), ready to start on " << ip_address << ":" << port);
 
-		pk.pack("payload");
+		pk.pack("result");
 		pk.pack_map(2);
 		pk.pack("success");
 		pk.pack(true);

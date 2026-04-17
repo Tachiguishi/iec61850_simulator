@@ -80,9 +80,7 @@ std::string handle_action(const std::string& request_bytes, BackendContext& cont
 		pk.pack_map(4);
 		pk.pack("id");
 		pk.pack("");
-		pk.pack("type");
-		pk.pack("response");
-		pk.pack("payload");
+		pk.pack("result");
 		pk.pack_map(0);
 		pk.pack("error");
 		ipc::codec::pack_error(pk, std::string("Decode error: ") + exc.what());
@@ -92,16 +90,14 @@ std::string handle_action(const std::string& request_bytes, BackendContext& cont
 
 	LOG4CPLUS_INFO(core_logger(), "IPC action: " << request.action << " id=" << request.id);
 
-	pk.pack_map(4);
+	pk.pack_map(3);
 	pk.pack("id");
 	pk.pack(request.id);
-	pk.pack("type");
-	pk.pack("response");
 	ActionContext ctx{request.action, context, request.payload, request.has_payload};
 	ActionHandler* handler = get_registry().find(request.action);
 	if (!handler) {
 		LOG4CPLUS_WARN(core_logger(), "Unknown action: " << request.action);
-		pk.pack("payload");
+		pk.pack("result");
 		pk.pack_map(0);
 		pk.pack("error");
 		ipc::codec::pack_error(pk, "Unknown action");
@@ -109,6 +105,7 @@ std::string handle_action(const std::string& request_bytes, BackendContext& cont
 	}
 	handler->handle(ctx, pk);
 
+	printf("Response bytes size: %zu\n", buffer.size());
 	response_bytes.assign(buffer.data(), buffer.size());
 	return response_bytes;
 }

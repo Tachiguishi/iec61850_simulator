@@ -141,7 +141,7 @@ bool require_instance_id(const msgpack::object& payload,
     instance_id = extract_instance_id(payload);
     if (instance_id.empty()) {
         LOG4CPLUS_ERROR(client_logger(), action << ": instance_id is required");
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(0);
         pk.pack("error");
         ipc::codec::pack_error(pk, "instance_id is required");
@@ -171,7 +171,7 @@ public:
         auto cfg_obj = ipc::codec::find_key(ctx.payload, "config");
         if (!host_obj || !port_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.connect invalid request");
-            pk.pack("payload");
+            pk.pack("result");
             pk.pack_map(0);
             pk.pack("error");
             ipc::codec::pack_error(pk, "Invalid request");
@@ -209,7 +209,7 @@ public:
         if (error == IED_ERROR_OK) {
             inst->connected = true;
             LOG4CPLUS_INFO(client_logger(), "client.connect success for instance " << instance_id);
-            pk.pack("payload");
+            pk.pack("result");
             pk.pack_map(2);
             pk.pack("success");
             pk.pack(true);
@@ -220,7 +220,7 @@ public:
         } else {
             inst->connected = false;
             LOG4CPLUS_ERROR(client_logger(), "client.connect failed: " << IedClientError_toString(error));
-            pk.pack("payload");
+            pk.pack("result");
             pk.pack_map(0);
             pk.pack("error");
             ipc::codec::pack_error(pk, IedClientError_toString(error));
@@ -251,7 +251,7 @@ public:
             inst->connected = false;
             ctx.context.remove_client_instance(instance_id);
         }
-        pk.pack("payload");
+        pk.pack("result");
         ipc::codec::pack_success_payload(pk);
         pk.pack("error");
         pk.pack_nil();
@@ -277,13 +277,13 @@ public:
 
         if (!connection) {
             LOG4CPLUS_ERROR(client_logger(), "client.browse when not connected");
-            pk.pack("payload");
+            pk.pack("result");
             pk.pack_map(0);
             pk.pack("error");
             ipc::codec::pack_error(pk, "Client not connected");
         } else {
             LOG4CPLUS_DEBUG(client_logger(), "client.browse requested");
-            pk.pack("payload");
+            pk.pack("result");
             pk.pack_map(1);
             pk.pack("model");
             pack_model(pk, connection, ied_name);
@@ -313,7 +313,7 @@ public:
 
         if (!connection || !ref_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.read invalid request");
-            pk.pack("payload");
+            pk.pack("result");
             pk.pack_map(0);
             pk.pack("error");
             ipc::codec::pack_error(pk, "Invalid request");
@@ -332,7 +332,7 @@ public:
             }
         }
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(1);
         pk.pack("value");
         if (error == IED_ERROR_OK && value) {
@@ -398,7 +398,7 @@ public:
 
         if (!connection || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
             LOG4CPLUS_ERROR(client_logger(), "client.read_batch invalid request");
-            pk.pack("payload");
+            pk.pack("result");
             pk.pack_map(0);
             pk.pack("error");
             ipc::codec::pack_error(pk, "Invalid request");
@@ -406,7 +406,7 @@ public:
         }
 
         LOG4CPLUS_DEBUG(client_logger(), "client.read_batch requested");
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(1);
         pk.pack("values");
         pk.pack_map(refs_obj->via.array.size);
@@ -485,7 +485,7 @@ public:
 
         if (!connection || !ref_obj || !value_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.write invalid request");
-            pk.pack("payload");
+            pk.pack("result");
             pk.pack_map(0);
             pk.pack("error");
             ipc::codec::pack_error(pk, "Invalid request");
@@ -537,7 +537,7 @@ public:
             }
         }
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(1);
         pk.pack("success");
         pk.pack(success);
@@ -561,7 +561,7 @@ public:
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
         LOG4CPLUS_DEBUG(client_logger(), "client.list_instances requested");
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(1);
         pk.pack("instances");
         pk.pack_array(ctx.context.client_instances.size());

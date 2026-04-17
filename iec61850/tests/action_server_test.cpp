@@ -41,18 +41,39 @@ msgpack::object_handle execute_action(
     pk.pack_map(has_payload ? 3 : 2);
     pk.pack("id");
     pk.pack("test-id");
-    pk.pack("action");
+    pk.pack("method");
     pk.pack(action);
     if (has_payload) {
-        pk.pack("payload");
+        pk.pack("params");
         pk.pack(payload);
     }
 
     std::string request_bytes(request_buffer.data(), request_buffer.size());
     std::string response_bytes = ipc::actions::handle_action(request_bytes, context);
-    auto response_handle = msgpack::unpack(response_bytes.data(), response_bytes.size());
-    out_response = response_handle.get();
-    return response_handle;
+    try {
+        auto response_handle = msgpack::unpack(response_bytes.data(), response_bytes.size());
+        out_response = response_handle.get();
+        return response_handle;
+    } catch (const std::exception& ex) {
+        std::cerr << "msgpack::unpack failed: " << ex.what() << std::endl;
+        std::cerr << "response_bytes.size() = " << response_bytes.size() << std::endl;
+        // 打印 response_bytes 的内容
+        std::cerr << "response_bytes (hex): ";
+        for (unsigned char c : response_bytes) {
+            std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)c << " ";
+        }
+        std::cerr << std::dec << std::endl;
+        
+        std::cerr << "response_bytes (ascii): ";
+        for (unsigned char c : response_bytes) {
+            if (std::isprint(c))
+                std::cerr << c;
+            else
+                std::cerr << ".";
+        }
+        std::cerr << std::endl;
+        throw;
+    }
 }
 
 const msgpack::object* find_key(const msgpack::object& map_obj, const std::string& key) {
@@ -72,11 +93,11 @@ std::string get_error_message(const msgpack::object& response) {
 }
 
 bool get_success_flag(const msgpack::object& response) {
-    const msgpack::object* payload_obj = find_key(response, "payload");
-    if (!payload_obj || payload_obj->type != msgpack::type::MAP) {
+    const msgpack::object* result_obj = find_key(response, "result");
+    if (!result_obj || result_obj->type != msgpack::type::MAP) {
         return false;
     }
-    const msgpack::object* success_obj = find_key(*payload_obj, "success");
+    const msgpack::object* success_obj = find_key(*result_obj, "success");
     if (!success_obj || success_obj->type != msgpack::type::BOOLEAN) {
         return false;
     }

@@ -130,9 +130,8 @@ class UDSMessageClient:
         request_id = str(uuid.uuid4())
         message = {
             "id": request_id,
-            "type": "request",
-            "action": action,
-            "payload": payload or {},
+            "method": action,
+            "params": payload or {},
         }
 
         packed = msgpack.packb(message, use_bin_type=True)
@@ -158,7 +157,7 @@ class UDSMessageClient:
                 await self.close_async()
                 raise IPCError(f"IPC timeout: {exc}") from exc
 
-        if response.get("type") != "response" or response.get("id") != request_id:
+        if response.get("id") != request_id:
             raise IPCError("IPC protocol error: unexpected response")
 
         if response.get("error"):
@@ -167,7 +166,7 @@ class UDSMessageClient:
             raise IPCError(err_message)
 
         # 注意：不在此处关闭连接，保持长链接打开供后续请求使用
-        return IPCResponse(data=response.get("payload", {}))
+        return IPCResponse(data=response.get("result", {}))
 
     async def _sendall_async(self, data: bytes) -> None:
         """Send all data through the async socket."""

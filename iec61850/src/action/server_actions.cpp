@@ -235,7 +235,7 @@ public:
 
         LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port << " with state " << (inst->running ? "RUNNING" : "FAILED"));
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(2);
         pk.pack("success");
         if (inst->running) {
@@ -277,7 +277,7 @@ public:
             LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " stopped");
         }
 
-        pk.pack("payload");
+        pk.pack("result");
         ipc::codec::pack_success_payload(pk);
         pk.pack("error");
         pk.pack_nil();
@@ -333,7 +333,7 @@ public:
             LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " removed");
         }
 
-        pk.pack("payload");
+        pk.pack("result");
         ipc::codec::pack_success_payload(pk);
         pk.pack("error");
         pk.pack_nil();
@@ -378,7 +378,7 @@ public:
             IedServer_unlockDataModel(inst->server);
         }
 
-        pk.pack("payload");
+        pk.pack("result");
         ipc::codec::pack_success_payload(pk);
         pk.pack("error");
         pk.pack_nil();
@@ -412,7 +412,7 @@ public:
             return true;
         }
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(1);
         pk.pack("values");
         pk.pack_map(refs_obj->via.array.size);
@@ -461,7 +461,7 @@ public:
 
         auto* inst = ctx.context.get_server_instance(instance_id);
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(1);
         pk.pack("clients");
         if (inst) {
@@ -494,7 +494,7 @@ public:
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
         LOG4CPLUS_DEBUG(server_logger(), "server.list_instances requested");
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(1);
         pk.pack("instances");
         pk.pack_array(ctx.context.server_instances.size());
@@ -533,7 +533,7 @@ public:
 
         auto interfaces = network::get_network_interfaces();
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(2);
         pk.pack("interfaces");
         pk.pack_array(interfaces.size());
@@ -603,7 +603,7 @@ public:
 
         LOG4CPLUS_INFO(server_logger(), "Global interface set to: " << interface_name << " (prefix_len: " << prefix_len << ")");
 
-        pk.pack("payload");
+        pk.pack("result");
         pk.pack_map(2);
         pk.pack("interface_name");
         pk.pack(interface_name);

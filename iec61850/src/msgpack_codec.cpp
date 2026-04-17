@@ -10,10 +10,10 @@ Request decode_request(const std::string& bytes) {
     if (auto id_obj = find_key(root, "id")) {
         req.id = as_string(*id_obj, "");
     }
-    if (auto action_obj = find_key(root, "action")) {
-        req.action = as_string(*action_obj, "");
+    if (auto method_obj = find_key(root, "method")) {
+        req.action = as_string(*method_obj, "");
     }
-    if (auto payload_ptr = find_key(root, "payload")) {
+    if (auto payload_ptr = find_key(root, "params")) {
         req.payload = *payload_ptr;
         req.has_payload = true;
     }
