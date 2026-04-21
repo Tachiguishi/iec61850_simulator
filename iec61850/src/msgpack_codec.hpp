@@ -10,23 +10,22 @@ namespace ipc::codec {
 struct Request {
     std::string id;
     std::string action;
-    msgpack::object payload;
+    nlohmann::json payload;
     bool has_payload = false;
-    msgpack::object_handle handle;
 };
 
 Request decode_request(const std::string& bytes);
-const msgpack::object_handle encode_response(nlohmann::json& response_json);
+std::string encode_response_bytes(const nlohmann::json& response_json);
 
 void encode_msgpack_from_json(const nlohmann::json& json, msgpack::packer<msgpack::sbuffer>& pk);
 
-const msgpack::object* find_key(const msgpack::object& map_obj, const std::string& key);
-std::string as_string(const msgpack::object& obj, const std::string& fallback = "");
-int64_t as_int64(const msgpack::object& obj, int64_t fallback = 0);
-bool as_bool(const msgpack::object& obj, bool fallback = false);
-double as_double(const msgpack::object& obj, double fallback = 0.0);
+const nlohmann::json* find_key(const nlohmann::json& map_obj, const std::string& key);
+std::string as_string(const nlohmann::json& obj, const std::string& fallback = "");
+int64_t as_int64(const nlohmann::json& obj, int64_t fallback = 0);
+bool as_bool(const nlohmann::json& obj, bool fallback = false);
+double as_double(const nlohmann::json& obj, double fallback = 0.0);
 
-void pack_error(msgpack::packer<msgpack::sbuffer>& pk, const std::string& message);
-void pack_success_payload(msgpack::packer<msgpack::sbuffer>& pk);
+nlohmann::json make_error(const std::string& message);
+nlohmann::json make_success_payload();
 
 } // namespace ipc::codec

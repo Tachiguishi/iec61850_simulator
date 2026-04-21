@@ -1,11 +1,130 @@
 #include "test_helpers.hpp"
 
+#include "action/action.hpp"
 #include "msgpack_codec.hpp"
 
+#include <cctype>
+#include <filesystem>
 #include <fstream>
-#include <stdexcept>
+#include <iomanip>
+#include <iostream>
 #include <limits.h>
+#include <stdexcept>
 #include <unistd.h>
+
+msgpack::object_handle pack_msgpack_object(const std::function<void(msgpack::packer<msgpack::sbuffer>&)>& pack_fn) {
+  msgpack::sbuffer buffer;
+  msgpack::packer<msgpack::sbuffer> pk(&buffer);
+  pack_fn(pk);
+  return msgpack::unpack(buffer.data(), buffer.size());
+}
+
+void pack_json_value(msgpack::packer<msgpack::sbuffer>& pk, const nlohmann::json& value) {
+  const auto pack_json = [&pk](const nlohmann::json& current, const auto& self) -> void {
+    if (current.is_null()) {
+      pk.pack_nil();
+      return;
+    }
+    if (current.is_boolean()) {
+      pk.pack(current.get<bool>());
+      return;
+    }
+    if (current.is_number_integer()) {
+      pk.pack(current.get<int64_t>());
+      return;
+    }
+    if (current.is_number_unsigned()) {
+      pk.pack(current.get<uint64_t>());
+      return;
+    }
+    if (current.is_number_float()) {
+      pk.pack(current.get<double>());
+      return;
+    }
+    if (current.is_string()) {
+      pk.pack(current.get<std::string>());
+      return;
+    }
+    if (current.is_array()) {
+      pk.pack_array(current.size());
+      for (const auto& item : current) {
+        self(item, self);
+      }
+      return;
+    }
+    if (current.is_object()) {
+      pk.pack_map(current.size());
+      for (auto it = current.begin(); it != current.end(); ++it) {
+        pk.pack(it.key());
+        self(it.value(), self);
+      }
+      return;
+    }
+
+    throw std::runtime_error("Unsupported JSON value while packing msgpack");
+  };
+
+  pack_json(value, pack_json);
+}
+
+msgpack::object_handle make_payload_from_json(const nlohmann::json& value) {
+  return pack_msgpack_object([&value](msgpack::packer<msgpack::sbuffer>& pk) {
+    pack_json_value(pk, value);
+  });
+}
+
+nlohmann::json unpack_msgpack_bytes_to_json(const std::string& bytes) {
+  try {
+    std::vector<std::uint8_t> raw(bytes.begin(), bytes.end());
+    return nlohmann::json::from_msgpack(raw);
+  } catch (const std::exception& ex) {
+    std::cerr << "msgpack decode failed: " << ex.what() << std::endl;
+    std::cerr << "bytes.size() = " << bytes.size() << std::endl;
+    std::cerr << "bytes (hex): ";
+    for (unsigned char c : bytes) {
+      std::cerr << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(c) << " ";
+    }
+    std::cerr << std::dec << std::endl;
+
+    std::cerr << "bytes (ascii): ";
+    for (unsigned char c : bytes) {
+      if (std::isprint(c)) {
+        std::cerr << c;
+      } else {
+        std::cerr << ".";
+      }
+    }
+    std::cerr << std::endl;
+    throw;
+  }
+}
+
+nlohmann::json execute_action_json(const std::string& action, BackendContext& context) {
+  msgpack::object dummy;
+  return execute_action_json(action, context, dummy, false);
+}
+
+nlohmann::json execute_action_json(const std::string& action,
+                                  BackendContext& context,
+                                  const msgpack::object& payload,
+                                  bool has_payload) {
+  msgpack::sbuffer request_buffer;
+  msgpack::packer<msgpack::sbuffer> pk(&request_buffer);
+
+  pk.pack_map(has_payload ? 3 : 2);
+  pk.pack("id");
+  pk.pack("test-id");
+  pk.pack("method");
+  pk.pack(action);
+  if (has_payload) {
+    pk.pack("params");
+    pk.pack(payload);
+  }
+
+  std::string request_bytes(request_buffer.data(), request_buffer.size());
+  std::string response_bytes = ipc::actions::handle_action(request_bytes, context);
+  return unpack_msgpack_bytes_to_json(response_bytes);
+}
 
 /*
 {
@@ -882,49 +1001,5 @@ void pack_payload_from_json_file(msgpack::packer<msgpack::sbuffer>& pk, const st
   response_json["instance_id"] = "default_instance";
   response_json["model"] = payload;
 
-  const auto pack_json = [&pk](const nlohmann::json& value, const auto& self) -> void {
-    if (value.is_null()) {
-      pk.pack_nil();
-      return;
-    }
-    if (value.is_boolean()) {
-      pk.pack(value.get<bool>());
-      return;
-    }
-    if (value.is_number_integer()) {
-      pk.pack(value.get<int64_t>());
-      return;
-    }
-    if (value.is_number_unsigned()) {
-      pk.pack(value.get<uint64_t>());
-      return;
-    }
-    if (value.is_number_float()) {
-      pk.pack(value.get<double>());
-      return;
-    }
-    if (value.is_string()) {
-      pk.pack(value.get<std::string>());
-      return;
-    }
-    if (value.is_array()) {
-      pk.pack_array(value.size());
-      for (const auto& item : value) {
-        self(item, self);
-      }
-      return;
-    }
-    if (value.is_object()) {
-      pk.pack_map(value.size());
-      for (auto it = value.begin(); it != value.end(); ++it) {
-        pk.pack(it.key());
-        self(it.value(), self);
-      }
-      return;
-    }
-
-    throw std::runtime_error("Unsupported JSON value while packing msgpack");
-  };
-
-  pack_json(response_json, pack_json);
+  pack_json_value(pk, response_json);
 }

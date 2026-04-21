@@ -44,45 +44,41 @@ void on_connection_event(IedServer, ClientConnection connection, bool connected,
     }
 }
 
-void pack_attribute_value(msgpack::packer<msgpack::sbuffer>& pk, IedServer server, DataAttribute* da) {
+nlohmann::json attribute_value_json(IedServer server, DataAttribute* da) {
+    nlohmann::json result = {
+        {"value", nullptr},
+        {"quality", 0},
+        {"timestamp", nullptr},
+    };
+
     if (!da) {
-        pk.pack_map(3);
-        pk.pack("value");
-        pk.pack_nil();
-        pk.pack("quality");
-        pk.pack(0);
-        pk.pack("timestamp");
-        pk.pack_nil();
-        return;
+        return result;
     }
 
     DataAttributeType type = DataAttribute_getType(da);
-
-    pk.pack_map(3);
-    pk.pack("value");
     switch (type) {
         case IEC61850_BOOLEAN:
-            pk.pack(IedServer_getBooleanAttributeValue(server, da));
+            result["value"] = IedServer_getBooleanAttributeValue(server, da);
             break;
         case IEC61850_INT8:
         case IEC61850_INT16:
         case IEC61850_INT32:
         case IEC61850_ENUMERATED:
-            pk.pack(IedServer_getInt32AttributeValue(server, da));
+            result["value"] = IedServer_getInt32AttributeValue(server, da);
             break;
         case IEC61850_INT64:
-            pk.pack(IedServer_getInt64AttributeValue(server, da));
+            result["value"] = IedServer_getInt64AttributeValue(server, da);
             break;
         case IEC61850_INT8U:
         case IEC61850_INT16U:
         case IEC61850_INT32U:
-            pk.pack(IedServer_getUInt32AttributeValue(server, da));
+            result["value"] = IedServer_getUInt32AttributeValue(server, da);
             break;
         case IEC61850_FLOAT32:
-            pk.pack(IedServer_getFloatAttributeValue(server, da));
+            result["value"] = IedServer_getFloatAttributeValue(server, da);
             break;
         case IEC61850_FLOAT64:
-            pk.pack(static_cast<double>(IedServer_getFloatAttributeValue(server, da)));
+            result["value"] = static_cast<double>(IedServer_getFloatAttributeValue(server, da));
             break;
         case IEC61850_VISIBLE_STRING_32:
         case IEC61850_VISIBLE_STRING_64:
@@ -90,20 +86,16 @@ void pack_attribute_value(msgpack::packer<msgpack::sbuffer>& pk, IedServer serve
         case IEC61850_VISIBLE_STRING_255:
         case IEC61850_UNICODE_STRING_255: {
             const char* str = IedServer_getStringAttributeValue(server, da);
-            pk.pack(str ? str : "");
+            result["value"] = str ? str : "";
             break;
         }
         default:
-            pk.pack_nil();
             break;
     }
-    pk.pack("quality");
-    pk.pack(0);
-    pk.pack("timestamp");
-    pk.pack_nil();
+    return result;
 }
 
-void update_attribute_value(IedServer server, DataAttribute* da, const msgpack::object& value_obj) {
+void update_attribute_value(IedServer server, DataAttribute* da, const nlohmann::json& value_obj) {
     if (!da || !server) {
         return;
     }
@@ -160,15 +152,15 @@ class ServerStartAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.start"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, response, error_occurred);
         if (error_occurred) {
             return true;
         }
@@ -178,7 +170,7 @@ public:
         auto* inst = ctx.context.get_server_instance(instance_id);
         if (!inst || !inst->model) {
             LOG4CPLUS_ERROR(server_logger(), "server.start: server not initialized for instance " << instance_id);
-            pack_error_response(pk, "Server not initialized. Call server.load_model first");
+            pack_error_response(response, "Server not initialized. Call server.load_model first");
             return true;
         }
 
@@ -203,7 +195,7 @@ public:
         std::string ip_address = inst->ip_address;
 
         auto config_obj = ipc::codec::find_key(ctx.payload, "config");
-        if (config_obj && config_obj->type == msgpack::type::MAP) {
+        if (config_obj && config_obj->is_object()) {
             if (auto port_obj = ipc::codec::find_key(*config_obj, "port")) {
                 port = static_cast<int>(ipc::codec::as_int64(*port_obj, inst->port));
                 inst->port = port;
@@ -224,8 +216,7 @@ public:
             } else {
                 LOG4CPLUS_WARN(server_logger(), "Failed to configure IP " << ip_address << " on " << ctx.context.global_interface_name);
             }
-        }
-        else{
+        } else {
             LOG4CPLUS_INFO(server_logger(), "Using IP " << ip_address << " without additional configuration");
         }
 
@@ -235,18 +226,11 @@ public:
 
         LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " started on " << ip_address << ":" << port << " with state " << (inst->running ? "RUNNING" : "FAILED"));
 
-        pk.pack("result");
-        pk.pack_map(2);
-        pk.pack("success");
-        if (inst->running) {
-            pk.pack(true);
-        } else {
-            pk.pack(false);
-        }
-        pk.pack("instance_id");
-        pk.pack(instance_id);
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = {
+            {"success", inst->running},
+            {"instance_id", instance_id},
+        };
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -255,15 +239,15 @@ class ServerStopAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.stop"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, response, error_occurred);
         if (error_occurred) {
             return true;
         }
@@ -277,10 +261,8 @@ public:
             LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " stopped");
         }
 
-        pk.pack("result");
-        ipc::codec::pack_success_payload(pk);
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = ipc::codec::make_success_payload();
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -289,15 +271,15 @@ class ServerRemoveAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.remove"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, response, error_occurred);
         if (error_occurred) {
             return true;
         }
@@ -333,10 +315,8 @@ public:
             LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " removed");
         }
 
-        pk.pack("result");
-        ipc::codec::pack_success_payload(pk);
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = ipc::codec::make_success_payload();
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -345,15 +325,15 @@ class ServerSetDataValueAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.set_data_value"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, response, error_occurred);
         if (error_occurred) {
             return true;
         }
@@ -364,7 +344,7 @@ public:
         auto* inst = ctx.context.get_server_instance(instance_id);
         if (!inst || !inst->server || !inst->model || !ref_obj || !value_obj) {
             LOG4CPLUS_ERROR(server_logger(), "server.set_data_value invalid request for instance " << instance_id);
-            pack_error_response(pk, "Invalid request: missing server, model, reference, or value");
+            pack_error_response(response, "Invalid request: missing server, model, reference, or value");
             return true;
         }
 
@@ -378,10 +358,8 @@ public:
             IedServer_unlockDataModel(inst->server);
         }
 
-        pk.pack("result");
-        ipc::codec::pack_success_payload(pk);
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = ipc::codec::make_success_payload();
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -390,15 +368,15 @@ class ServerGetValuesAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.get_values"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, response, error_occurred);
         if (error_occurred) {
             return true;
         }
@@ -406,36 +384,29 @@ public:
         auto refs_obj = ipc::codec::find_key(ctx.payload, "references");
 
         auto* inst = ctx.context.get_server_instance(instance_id);
-        if (!inst || !inst->server || !inst->model || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
+        if (!inst || !inst->server || !inst->model || !refs_obj || !refs_obj->is_array()) {
             LOG4CPLUS_ERROR(server_logger(), "server.get_values invalid request for instance " << instance_id);
-            pack_error_response(pk, "Invalid request: missing server, model, or references array");
+            pack_error_response(response, "Invalid request: missing server, model, or references array");
             return true;
         }
 
-        pk.pack("result");
-        pk.pack_map(1);
-        pk.pack("values");
-        pk.pack_map(refs_obj->via.array.size);
-
-        for (uint32_t i = 0; i < refs_obj->via.array.size; ++i) {
-            std::string reference = ipc::codec::as_string(refs_obj->via.array.ptr[i]);
-            pk.pack(reference);
+        nlohmann::json values = nlohmann::json::object();
+        for (const auto& ref_item : *refs_obj) {
+            std::string reference = ipc::codec::as_string(ref_item, "");
             ModelNode* node = IedModel_getModelNodeByObjectReference(inst->model, reference.c_str());
             if (node && ModelNode_getType(node) == DataAttributeModelType) {
-                pack_attribute_value(pk, inst->server, reinterpret_cast<DataAttribute*>(node));
+                values[reference] = attribute_value_json(inst->server, reinterpret_cast<DataAttribute*>(node));
             } else {
-                pk.pack_map(3);
-                pk.pack("value");
-                pk.pack_nil();
-                pk.pack("quality");
-                pk.pack(0);
-                pk.pack("timestamp");
-                pk.pack_nil();
+                values[reference] = {
+                    {"value", nullptr},
+                    {"quality", 0},
+                    {"timestamp", nullptr},
+                };
             }
         }
 
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = {{"values", values}};
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -444,15 +415,15 @@ class ServerGetClientsAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.get_clients"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         bool error_occurred = false;
-        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, pk, error_occurred);
+        std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, response, error_occurred);
         if (error_occurred) {
             return true;
         }
@@ -460,24 +431,18 @@ public:
         LOG4CPLUS_DEBUG(server_logger(), "server.get_clients requested for instance " << instance_id);
 
         auto* inst = ctx.context.get_server_instance(instance_id);
-
-        pk.pack("result");
-        pk.pack_map(1);
-        pk.pack("clients");
+        nlohmann::json clients = nlohmann::json::array();
         if (inst) {
-            pk.pack_array(inst->clients.size());
             for (const auto& client : inst->clients) {
-                pk.pack_map(2);
-                pk.pack("id");
-                pk.pack(client.id);
-                pk.pack("connected_at");
-                pk.pack(client.connected_at);
+                clients.push_back({
+                    {"id", client.id},
+                    {"connected_at", client.connected_at},
+                });
             }
-        } else {
-            pk.pack_array(0);
         }
-        pk.pack("error");
-        pk.pack_nil();
+
+        response["result"] = {{"clients", clients}};
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -486,35 +451,28 @@ class ServerListInstancesAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.list_instances"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
         LOG4CPLUS_DEBUG(server_logger(), "server.list_instances requested");
 
-        pk.pack("result");
-        pk.pack_map(1);
-        pk.pack("instances");
-        pk.pack_array(ctx.context.server_instances.size());
-
+        nlohmann::json instances = nlohmann::json::array();
         for (const auto& entry : ctx.context.server_instances) {
             const auto& id = entry.first;
             const auto& inst = entry.second;
-            pk.pack_map(4);
-            pk.pack("instance_id");
-            pk.pack(id);
-            pk.pack("state");
-            pk.pack(inst->running ? "RUNNING" : "STOPPED");
-            pk.pack("port");
-            pk.pack(inst->port);
-            pk.pack("ied_name");
-            pk.pack(inst->ied_name);
+            instances.push_back({
+                {"instance_id", id},
+                {"state", inst->running ? "RUNNING" : "STOPPED"},
+                {"port", inst->port},
+                {"ied_name", inst->ied_name},
+            });
         }
 
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = {{"instances", instances}};
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -523,8 +481,8 @@ class ServerGetInterfacesAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.get_interfaces"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
@@ -533,39 +491,29 @@ public:
 
         auto interfaces = network::get_network_interfaces();
 
-        pk.pack("result");
-        pk.pack_map(2);
-        pk.pack("interfaces");
-        pk.pack_array(interfaces.size());
-
+        nlohmann::json iface_array = nlohmann::json::array();
         for (const auto& iface : interfaces) {
-            pk.pack_map(4);
-            pk.pack("name");
-            pk.pack(iface.name);
-            pk.pack("description");
-            pk.pack(iface.description);
-            pk.pack("is_up");
-            pk.pack(iface.is_up);
-            pk.pack("addresses");
-            pk.pack_array(iface.addresses.size());
-            for (const auto& addr : iface.addresses) {
-                pk.pack(addr);
-            }
+            iface_array.push_back({
+                {"name", iface.name},
+                {"description", iface.description},
+                {"is_up", iface.is_up},
+                {"addresses", iface.addresses},
+            });
         }
 
-        pk.pack("current_interface");
-        if (ctx.context.global_interface_name.empty()) {
-            pk.pack_nil();
-        } else {
-            pk.pack_map(2);
-            pk.pack("name");
-            pk.pack(ctx.context.global_interface_name);
-            pk.pack("prefix_len");
-            pk.pack(ctx.context.global_prefix_len);
+        nlohmann::json current_interface = nullptr;
+        if (!ctx.context.global_interface_name.empty()) {
+            current_interface = {
+                {"name", ctx.context.global_interface_name},
+                {"prefix_len", ctx.context.global_prefix_len},
+            };
         }
 
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = {
+            {"interfaces", iface_array},
+            {"current_interface", current_interface},
+        };
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -574,8 +522,8 @@ class ServerSetInterfaceAction final : public ActionHandler {
 public:
     const char* name() const override { return "server.set_interface"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
-        if (!ensure_payload_map(ctx, pk)) {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
+        if (!ensure_payload_map(ctx, response)) {
             return true;
         }
 
@@ -585,7 +533,7 @@ public:
         auto iface_obj = ipc::codec::find_key(ctx.payload, "interface_name");
         if (!iface_obj) {
             LOG4CPLUS_ERROR(server_logger(), "server.set_interface: interface_name is required");
-            pack_error_response(pk, "interface_name is required");
+            pack_error_response(response, "interface_name is required");
             return true;
         }
 
@@ -603,14 +551,11 @@ public:
 
         LOG4CPLUS_INFO(server_logger(), "Global interface set to: " << interface_name << " (prefix_len: " << prefix_len << ")");
 
-        pk.pack("result");
-        pk.pack_map(2);
-        pk.pack("interface_name");
-        pk.pack(interface_name);
-        pk.pack("prefix_len");
-        pk.pack(prefix_len);
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = {
+            {"interface_name", interface_name},
+            {"prefix_len", prefix_len},
+        };
+        response["error"] = nullptr;
         return true;
     }
 };

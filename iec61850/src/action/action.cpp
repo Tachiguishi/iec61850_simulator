@@ -12,43 +12,41 @@ namespace ipc::actions {
 namespace {
 
 ActionRegistry& get_registry() {
-	static ActionRegistry registry = [] {
-		ActionRegistry reg;
-		register_client_actions(reg);
-		register_server_actions(reg);
-		return reg;
-	}();
+    static ActionRegistry registry = [] {
+        ActionRegistry reg;
+        register_client_actions(reg);
+        register_server_actions(reg);
+        return reg;
+    }();
 
-	return registry;
+    return registry;
 }
 
 } // namespace
 
-bool ActionHandler::ensure_payload_map(const ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) {
-	if (!ctx.has_payload || ctx.payload.type != msgpack::type::MAP) {
-		LOG4CPLUS_ERROR(server_logger(), ctx.action << " missing payload");
-		pack_error_response(pk, "Missing payload");
-		return false;
-	}
-	return true;
+bool ActionHandler::ensure_payload_map(const ActionContext& ctx, nlohmann::json& response) {
+    if (!ctx.has_payload || !ctx.payload.is_object()) {
+        LOG4CPLUS_ERROR(server_logger(), ctx.action << " missing payload");
+        pack_error_response(response, "Missing payload");
+        return false;
+    }
+    return true;
 }
 
-void ActionHandler::pack_error_response(msgpack::packer<msgpack::sbuffer>& pk, const std::string& error_msg){
-	pk.pack("payload");
-	pk.pack_map(0);
-	pk.pack("error");
-	ipc::codec::pack_error(pk, error_msg);
+void ActionHandler::pack_error_response(nlohmann::json& response, const std::string& error_msg) {
+    response["result"] = nlohmann::json::object();
+    response["error"] = ipc::codec::make_error(error_msg);
 }
 
 std::string ActionHandler::validate_and_extract_instance_id(
-    const msgpack::object& payload,
+    const nlohmann::json& payload,
     const std::string& action,
-    msgpack::packer<msgpack::sbuffer>& pk,
+    nlohmann::json& response,
     bool& error_occurred) {
     std::string instance_id = extract_instance_id(payload);
     if (instance_id.empty()) {
         LOG4CPLUS_ERROR(server_logger(), action << ": instance_id is required");
-        pack_error_response(pk, "instance_id is required");
+        pack_error_response(response, "instance_id is required");
         error_occurred = true;
         return "";
     }
@@ -56,7 +54,7 @@ std::string ActionHandler::validate_and_extract_instance_id(
     return instance_id;
 }
 
-std::string ActionHandler::extract_instance_id(const msgpack::object& payload) {
+std::string ActionHandler::extract_instance_id(const nlohmann::json& payload) {
     if (auto id_obj = ipc::codec::find_key(payload, "instance_id")) {
         std::string id = ipc::codec::as_string(*id_obj, "");
         if (!id.empty()) {
@@ -67,47 +65,33 @@ std::string ActionHandler::extract_instance_id(const msgpack::object& payload) {
 }
 
 std::string handle_action(const std::string& request_bytes, BackendContext& context) {
-	
-	msgpack::sbuffer buffer;
-	msgpack::packer<msgpack::sbuffer> pk(&buffer);
-	std::string response_bytes;
+    ipc::codec::Request request;
+    nlohmann::json response = nlohmann::json::object();
 
-	ipc::codec::Request request;
-	try {
-		request = ipc::codec::decode_request(request_bytes);
-	} catch (const std::exception& exc) {
-		LOG4CPLUS_ERROR(core_logger(), "Decode error: " << exc.what());
-		pk.pack_map(4);
-		pk.pack("id");
-		pk.pack("");
-		pk.pack("result");
-		pk.pack_map(0);
-		pk.pack("error");
-		ipc::codec::pack_error(pk, std::string("Decode error: ") + exc.what());
-		response_bytes.assign(buffer.data(), buffer.size());
-		return response_bytes;
-	}
+    try {
+        request = ipc::codec::decode_request(request_bytes);
+    } catch (const std::exception& exc) {
+        LOG4CPLUS_ERROR(core_logger(), "Decode error: " << exc.what());
+        response["id"] = "";
+        response["result"] = nlohmann::json::object();
+        response["error"] = ipc::codec::make_error(std::string("Decode error: ") + exc.what());
+        return ipc::codec::encode_response_bytes(response);
+    }
 
-	LOG4CPLUS_INFO(core_logger(), "IPC action: " << request.action << " id=" << request.id);
+    LOG4CPLUS_INFO(core_logger(), "IPC action: " << request.action << " id=" << request.id);
 
-	pk.pack_map(3);
-	pk.pack("id");
-	pk.pack(request.id);
-	ActionContext ctx{request.action, context, request.payload, request.has_payload};
-	ActionHandler* handler = get_registry().find(request.action);
-	if (!handler) {
-		LOG4CPLUS_WARN(core_logger(), "Unknown action: " << request.action);
-		pk.pack("result");
-		pk.pack_map(0);
-		pk.pack("error");
-		ipc::codec::pack_error(pk, "Unknown action");
-		return response_bytes;
-	}
-	handler->handle(ctx, pk);
+    response["id"] = request.id;
+    ActionContext ctx{request.action, context, request.payload, request.has_payload};
+    ActionHandler* handler = get_registry().find(request.action);
+    if (!handler) {
+        LOG4CPLUS_WARN(core_logger(), "Unknown action: " << request.action);
+        response["result"] = nlohmann::json::object();
+        response["error"] = ipc::codec::make_error("Unknown action");
+        return ipc::codec::encode_response_bytes(response);
+    }
 
-	printf("Response bytes size: %zu\n", buffer.size());
-	response_bytes.assign(buffer.data(), buffer.size());
-	return response_bytes;
+    handler->handle(ctx, response);
+    return ipc::codec::encode_response_bytes(response);
 }
 
 } // namespace ipc::actions

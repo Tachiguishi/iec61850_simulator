@@ -14,17 +14,16 @@
 
 namespace {
 
-void pack_model(msgpack::packer<msgpack::sbuffer>& pk, IedConnection connection, const std::string& ied_name) {
-    pk.pack_map(2);
-    pk.pack("ied_name");
-    pk.pack(ied_name);
-    pk.pack("logical_devices");
+nlohmann::json build_model(IedConnection connection, const std::string& ied_name) {
+    nlohmann::json model = {
+        {"ied_name", ied_name},
+        {"logical_devices", nlohmann::json::object()},
+    };
 
     IedClientError error = IED_ERROR_OK;
     LinkedList ld_list = IedConnection_getLogicalDeviceList(connection, &error);
     if (error != IED_ERROR_OK || ld_list == nullptr) {
-        pk.pack_map(0);
-        return;
+        return model;
     }
 
     std::vector<std::string> ld_names;
@@ -36,18 +35,13 @@ void pack_model(msgpack::packer<msgpack::sbuffer>& pk, IedConnection connection,
     }
     LinkedList_destroy(ld_list);
 
-    pk.pack_map(ld_names.size());
-
     for (const auto& ld_name : ld_names) {
-        pk.pack(ld_name);
-        pk.pack_map(2);
-        pk.pack("description");
-        pk.pack("");
-        pk.pack("logical_nodes");
+        auto& ld = model["logical_devices"][ld_name];
+        ld["description"] = "";
+        ld["logical_nodes"] = nlohmann::json::object();
 
         LinkedList ln_list = IedConnection_getLogicalDeviceDirectory(connection, &error, ld_name.c_str());
         if (error != IED_ERROR_OK || ln_list == nullptr) {
-            pk.pack_map(0);
             continue;
         }
 
@@ -60,20 +54,15 @@ void pack_model(msgpack::packer<msgpack::sbuffer>& pk, IedConnection connection,
         }
         LinkedList_destroy(ln_list);
 
-        pk.pack_map(ln_names.size());
         for (const auto& ln_name : ln_names) {
-            pk.pack(ln_name);
-            pk.pack_map(3);
-            pk.pack("class");
-            pk.pack("");
-            pk.pack("description");
-            pk.pack("");
-            pk.pack("data_objects");
+            auto& ln = ld["logical_nodes"][ln_name];
+            ln["class"] = "";
+            ln["description"] = "";
+            ln["data_objects"] = nlohmann::json::object();
 
             std::string ln_ref = ld_name + "/" + ln_name;
             LinkedList do_list = IedConnection_getLogicalNodeVariables(connection, &error, ln_ref.c_str());
             if (error != IED_ERROR_OK || do_list == nullptr) {
-                pk.pack_map(0);
                 continue;
             }
 
@@ -86,20 +75,15 @@ void pack_model(msgpack::packer<msgpack::sbuffer>& pk, IedConnection connection,
             }
             LinkedList_destroy(do_list);
 
-            pk.pack_map(do_names.size());
             for (const auto& do_name : do_names) {
-                pk.pack(do_name);
-                pk.pack_map(3);
-                pk.pack("cdc");
-                pk.pack("");
-                pk.pack("description");
-                pk.pack("");
-                pk.pack("attributes");
+                auto& dobj = ln["data_objects"][do_name];
+                dobj["cdc"] = "";
+                dobj["description"] = "";
+                dobj["attributes"] = nlohmann::json::object();
 
                 std::string do_ref = ln_ref + "." + do_name;
                 LinkedList attr_list = IedConnection_getDataDirectory(connection, &error, do_ref.c_str());
                 if (error != IED_ERROR_OK || attr_list == nullptr) {
-                    pk.pack_map(0);
                     continue;
                 }
 
@@ -112,19 +96,17 @@ void pack_model(msgpack::packer<msgpack::sbuffer>& pk, IedConnection connection,
                 }
                 LinkedList_destroy(attr_list);
 
-                pk.pack_map(attrs.size());
                 for (const auto& attr : attrs) {
-                    pk.pack(attr);
-                    pk.pack_map(1);
-                    pk.pack("name");
-                    pk.pack(attr);
+                    dobj["attributes"][attr] = nlohmann::json{{"name", attr}};
                 }
             }
         }
     }
+
+    return model;
 }
 
-std::string extract_instance_id(const msgpack::object& payload) {
+std::string extract_instance_id(const nlohmann::json& payload) {
     if (auto id_obj = ipc::codec::find_key(payload, "instance_id")) {
         std::string id = ipc::codec::as_string(*id_obj, "");
         if (!id.empty()) {
@@ -134,20 +116,59 @@ std::string extract_instance_id(const msgpack::object& payload) {
     return "";
 }
 
-bool require_instance_id(const msgpack::object& payload,
+bool require_instance_id(const nlohmann::json& payload,
                          const std::string& action,
-                         msgpack::packer<msgpack::sbuffer>& pk,
+                         nlohmann::json& response,
                          std::string& instance_id) {
     instance_id = extract_instance_id(payload);
     if (instance_id.empty()) {
         LOG4CPLUS_ERROR(client_logger(), action << ": instance_id is required");
-        pk.pack("result");
-        pk.pack_map(0);
-        pk.pack("error");
-        ipc::codec::pack_error(pk, "instance_id is required");
+        response["result"] = nlohmann::json::object();
+        response["error"] = ipc::codec::make_error("instance_id is required");
         return false;
     }
     return true;
+}
+
+nlohmann::json read_value_result(IedConnection connection, const std::string& reference) {
+    std::vector<FunctionalConstraint> fcs = {IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_SP, IEC61850_FC_CF};
+    IedClientError error = IED_ERROR_OK;
+    MmsValue* value = nullptr;
+    for (auto fc : fcs) {
+        value = IedConnection_readObject(connection, &error, reference.c_str(), fc);
+        if (error == IED_ERROR_OK && value) {
+            break;
+        }
+    }
+
+    nlohmann::json value_result = {
+        {"value", nullptr},
+        {"quality", 0},
+        {"timestamp", nullptr},
+        {"error", nullptr},
+    };
+
+    if (error == IED_ERROR_OK && value) {
+        MmsType type = MmsValue_getType(value);
+        if (type == MMS_BOOLEAN) {
+            value_result["value"] = MmsValue_getBoolean(value);
+        } else if (type == MMS_INTEGER) {
+            value_result["value"] = MmsValue_toInt64(value);
+        } else if (type == MMS_UNSIGNED) {
+            value_result["value"] = MmsValue_toUint32(value);
+        } else if (type == MMS_FLOAT) {
+            value_result["value"] = MmsValue_toDouble(value);
+        } else if (type == MMS_VISIBLE_STRING || type == MMS_STRING) {
+            value_result["value"] = std::string(MmsValue_toString(value));
+        }
+    } else {
+        value_result["error"] = IedClientError_toString(error);
+    }
+
+    if (value) {
+        MmsValue_delete(value);
+    }
+    return value_result;
 }
 
 } // namespace
@@ -158,11 +179,11 @@ class ClientConnectAction final : public ActionHandler {
 public:
     const char* name() const override { return "client.connect"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         std::string instance_id;
-        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
+        if (!require_instance_id(ctx.payload, ctx.action, response, instance_id)) {
             return true;
         }
 
@@ -171,10 +192,8 @@ public:
         auto cfg_obj = ipc::codec::find_key(ctx.payload, "config");
         if (!host_obj || !port_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.connect invalid request");
-            pk.pack("result");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Invalid request");
+            response["result"] = nlohmann::json::object();
+            response["error"] = ipc::codec::make_error("Invalid request");
             return true;
         }
 
@@ -196,7 +215,7 @@ public:
         inst->target_port = port;
         IedConnection connection = inst->connection;
 
-        if (cfg_obj && cfg_obj->type == msgpack::type::MAP) {
+        if (cfg_obj && cfg_obj->is_object()) {
             if (auto timeout_obj = ipc::codec::find_key(*cfg_obj, "timeout_ms")) {
                 IedConnection_setConnectTimeout(connection, static_cast<int>(ipc::codec::as_int64(*timeout_obj, 5000)));
                 IedConnection_setRequestTimeout(connection, static_cast<int>(ipc::codec::as_int64(*timeout_obj, 5000)));
@@ -209,21 +228,16 @@ public:
         if (error == IED_ERROR_OK) {
             inst->connected = true;
             LOG4CPLUS_INFO(client_logger(), "client.connect success for instance " << instance_id);
-            pk.pack("result");
-            pk.pack_map(2);
-            pk.pack("success");
-            pk.pack(true);
-            pk.pack("instance_id");
-            pk.pack(instance_id);
-            pk.pack("error");
-            pk.pack_nil();
+            response["result"] = {
+                {"success", true},
+                {"instance_id", instance_id},
+            };
+            response["error"] = nullptr;
         } else {
             inst->connected = false;
             LOG4CPLUS_ERROR(client_logger(), "client.connect failed: " << IedClientError_toString(error));
-            pk.pack("result");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, IedClientError_toString(error));
+            response["result"] = nlohmann::json::object();
+            response["error"] = ipc::codec::make_error(IedClientError_toString(error));
         }
         return true;
     }
@@ -233,11 +247,11 @@ class ClientDisconnectAction final : public ActionHandler {
 public:
     const char* name() const override { return "client.disconnect"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         std::string instance_id;
-        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
+        if (!require_instance_id(ctx.payload, ctx.action, response, instance_id)) {
             return true;
         }
 
@@ -251,10 +265,8 @@ public:
             inst->connected = false;
             ctx.context.remove_client_instance(instance_id);
         }
-        pk.pack("result");
-        ipc::codec::pack_success_payload(pk);
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = ipc::codec::make_success_payload();
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -263,11 +275,11 @@ class ClientBrowseAction final : public ActionHandler {
 public:
     const char* name() const override { return "client.browse"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         std::string instance_id;
-        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
+        if (!require_instance_id(ctx.payload, ctx.action, response, instance_id)) {
             return true;
         }
 
@@ -277,18 +289,14 @@ public:
 
         if (!connection) {
             LOG4CPLUS_ERROR(client_logger(), "client.browse when not connected");
-            pk.pack("result");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Client not connected");
+            response["result"] = nlohmann::json::object();
+            response["error"] = ipc::codec::make_error("Client not connected");
         } else {
             LOG4CPLUS_DEBUG(client_logger(), "client.browse requested");
-            pk.pack("result");
-            pk.pack_map(1);
-            pk.pack("model");
-            pack_model(pk, connection, ied_name);
-            pk.pack("error");
-            pk.pack_nil();
+            response["result"] = {
+                {"model", build_model(connection, ied_name)},
+            };
+            response["error"] = nullptr;
         }
         return true;
     }
@@ -298,11 +306,11 @@ class ClientReadAction final : public ActionHandler {
 public:
     const char* name() const override { return "client.read"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         std::string instance_id;
-        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
+        if (!require_instance_id(ctx.payload, ctx.action, response, instance_id)) {
             return true;
         }
 
@@ -313,68 +321,15 @@ public:
 
         if (!connection || !ref_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.read invalid request");
-            pk.pack("result");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Invalid request");
+            response["result"] = nlohmann::json::object();
+            response["error"] = ipc::codec::make_error("Invalid request");
             return true;
         }
 
         std::string reference = ipc::codec::as_string(*ref_obj, "");
         LOG4CPLUS_DEBUG(client_logger(), "client.read " << reference);
-        std::vector<FunctionalConstraint> fcs = {IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_SP, IEC61850_FC_CF};
-        IedClientError error = IED_ERROR_OK;
-        MmsValue* value = nullptr;
-        for (auto fc : fcs) {
-            value = IedConnection_readObject(connection, &error, reference.c_str(), fc);
-            if (error == IED_ERROR_OK && value) {
-                break;
-            }
-        }
-
-        pk.pack("result");
-        pk.pack_map(1);
-        pk.pack("value");
-        if (error == IED_ERROR_OK && value) {
-            pk.pack_map(4);
-            pk.pack("value");
-            MmsType type = MmsValue_getType(value);
-            if (type == MMS_BOOLEAN) {
-                pk.pack(MmsValue_getBoolean(value));
-            } else if (type == MMS_INTEGER) {
-                pk.pack(MmsValue_toInt64(value));
-            } else if (type == MMS_UNSIGNED) {
-                pk.pack(MmsValue_toUint32(value));
-            } else if (type == MMS_FLOAT) {
-                pk.pack(MmsValue_toDouble(value));
-            } else if (type == MMS_VISIBLE_STRING || type == MMS_STRING) {
-                pk.pack(MmsValue_toString(value));
-            } else {
-                pk.pack_nil();
-            }
-            pk.pack("quality");
-            pk.pack(0);
-            pk.pack("timestamp");
-            pk.pack_nil();
-            pk.pack("error");
-            pk.pack_nil();
-        } else {
-            pk.pack_map(4);
-            pk.pack("value");
-            pk.pack_nil();
-            pk.pack("quality");
-            pk.pack(0);
-            pk.pack("timestamp");
-            pk.pack_nil();
-            pk.pack("error");
-            pk.pack(IedClientError_toString(error));
-        }
-        pk.pack("error");
-        pk.pack_nil();
-
-        if (value) {
-            MmsValue_delete(value);
-        }
+        response["result"] = {{"value", read_value_result(connection, reference)}};
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -383,11 +338,11 @@ class ClientReadBatchAction final : public ActionHandler {
 public:
     const char* name() const override { return "client.read_batch"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         std::string instance_id;
-        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
+        if (!require_instance_id(ctx.payload, ctx.action, response, instance_id)) {
             return true;
         }
 
@@ -396,71 +351,23 @@ public:
         auto* inst = ctx.context.get_client_instance(instance_id);
         IedConnection connection = inst ? inst->connection : nullptr;
 
-        if (!connection || !refs_obj || refs_obj->type != msgpack::type::ARRAY) {
+        if (!connection || !refs_obj || !refs_obj->is_array()) {
             LOG4CPLUS_ERROR(client_logger(), "client.read_batch invalid request");
-            pk.pack("result");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Invalid request");
+            response["result"] = nlohmann::json::object();
+            response["error"] = ipc::codec::make_error("Invalid request");
             return true;
         }
 
         LOG4CPLUS_DEBUG(client_logger(), "client.read_batch requested");
-        pk.pack("result");
-        pk.pack_map(1);
-        pk.pack("values");
-        pk.pack_map(refs_obj->via.array.size);
+        nlohmann::json values = nlohmann::json::object();
 
-        for (uint32_t i = 0; i < refs_obj->via.array.size; ++i) {
-            std::string reference = ipc::codec::as_string(refs_obj->via.array.ptr[i], "");
-            pk.pack(reference);
-            std::vector<FunctionalConstraint> fcs = {IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_SP, IEC61850_FC_CF};
-            IedClientError error = IED_ERROR_OK;
-            MmsValue* value = nullptr;
-            for (auto fc : fcs) {
-                value = IedConnection_readObject(connection, &error, reference.c_str(), fc);
-                if (error == IED_ERROR_OK && value) {
-                    break;
-                }
-            }
-
-            pk.pack_map(4);
-            pk.pack("value");
-            if (error == IED_ERROR_OK && value) {
-                MmsType type = MmsValue_getType(value);
-                if (type == MMS_BOOLEAN) {
-                    pk.pack(MmsValue_getBoolean(value));
-                } else if (type == MMS_INTEGER) {
-                    pk.pack(MmsValue_toInt64(value));
-                } else if (type == MMS_UNSIGNED) {
-                    pk.pack(MmsValue_toUint32(value));
-                } else if (type == MMS_FLOAT) {
-                    pk.pack(MmsValue_toDouble(value));
-                } else if (type == MMS_VISIBLE_STRING || type == MMS_STRING) {
-                    pk.pack(MmsValue_toString(value));
-                } else {
-                    pk.pack_nil();
-                }
-            } else {
-                pk.pack_nil();
-            }
-            pk.pack("quality");
-            pk.pack(0);
-            pk.pack("timestamp");
-            pk.pack_nil();
-            pk.pack("error");
-            if (error == IED_ERROR_OK) {
-                pk.pack_nil();
-            } else {
-                pk.pack(IedClientError_toString(error));
-            }
-
-            if (value) {
-                MmsValue_delete(value);
-            }
+        for (const auto& ref : *refs_obj) {
+            std::string reference = ipc::codec::as_string(ref, "");
+            values[reference] = read_value_result(connection, reference);
         }
-        pk.pack("error");
-        pk.pack_nil();
+
+        response["result"] = {{"values", values}};
+        response["error"] = nullptr;
         return true;
     }
 };
@@ -469,11 +376,11 @@ class ClientWriteAction final : public ActionHandler {
 public:
     const char* name() const override { return "client.write"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
 
         std::string instance_id;
-        if (!require_instance_id(ctx.payload, ctx.action, pk, instance_id)) {
+        if (!require_instance_id(ctx.payload, ctx.action, response, instance_id)) {
             return true;
         }
 
@@ -485,10 +392,8 @@ public:
 
         if (!connection || !ref_obj || !value_obj) {
             LOG4CPLUS_ERROR(client_logger(), "client.write invalid request");
-            pk.pack("result");
-            pk.pack_map(0);
-            pk.pack("error");
-            ipc::codec::pack_error(pk, "Invalid request");
+            response["result"] = nlohmann::json::object();
+            response["error"] = ipc::codec::make_error("Invalid request");
             return true;
         }
 
@@ -496,18 +401,18 @@ public:
         LOG4CPLUS_DEBUG(client_logger(), "client.write " << reference);
         IedClientError error = IED_ERROR_OK;
         bool success = false;
-        if (value_obj->type == msgpack::type::BOOLEAN) {
-            std::vector<FunctionalConstraint> fcs = {IEC61850_FC_SP, IEC61850_FC_CF, IEC61850_FC_ST, IEC61850_FC_MX};
+        std::vector<FunctionalConstraint> fcs = {IEC61850_FC_SP, IEC61850_FC_CF, IEC61850_FC_ST, IEC61850_FC_MX};
+
+        if (value_obj->is_boolean()) {
             for (auto fc : fcs) {
-                IedConnection_writeBooleanValue(connection, &error, reference.c_str(), fc, value_obj->via.boolean);
+                IedConnection_writeBooleanValue(connection, &error, reference.c_str(), fc, value_obj->get<bool>());
                 if (error == IED_ERROR_OK) {
                     success = true;
                     break;
                 }
             }
-        } else if (value_obj->type == msgpack::type::FLOAT32 || value_obj->type == msgpack::type::FLOAT64) {
-            double v = value_obj->via.f64;
-            std::vector<FunctionalConstraint> fcs = {IEC61850_FC_SP, IEC61850_FC_CF, IEC61850_FC_ST, IEC61850_FC_MX};
+        } else if (value_obj->is_number_float()) {
+            double v = value_obj->get<double>();
             for (auto fc : fcs) {
                 IedConnection_writeFloatValue(connection, &error, reference.c_str(), fc, static_cast<float>(v));
                 if (error == IED_ERROR_OK) {
@@ -515,9 +420,8 @@ public:
                     break;
                 }
             }
-        } else if (value_obj->type == msgpack::type::STR) {
-            std::string value = ipc::codec::as_string(*value_obj, "");
-            std::vector<FunctionalConstraint> fcs = {IEC61850_FC_SP, IEC61850_FC_CF, IEC61850_FC_ST, IEC61850_FC_MX};
+        } else if (value_obj->is_string()) {
+            std::string value = value_obj->get<std::string>();
             for (auto fc : fcs) {
                 IedConnection_writeVisibleStringValue(connection, &error, reference.c_str(), fc, const_cast<char*>(value.c_str()));
                 if (error == IED_ERROR_OK) {
@@ -527,7 +431,6 @@ public:
             }
         } else {
             int64_t v = ipc::codec::as_int64(*value_obj);
-            std::vector<FunctionalConstraint> fcs = {IEC61850_FC_SP, IEC61850_FC_CF, IEC61850_FC_ST, IEC61850_FC_MX};
             for (auto fc : fcs) {
                 IedConnection_writeInt32Value(connection, &error, reference.c_str(), fc, static_cast<int32_t>(v));
                 if (error == IED_ERROR_OK) {
@@ -537,17 +440,13 @@ public:
             }
         }
 
-        pk.pack("result");
-        pk.pack_map(1);
-        pk.pack("success");
-        pk.pack(success);
-        pk.pack("error");
+        response["result"] = {{"success", success}};
         if (success) {
             LOG4CPLUS_INFO(client_logger(), "client.write success");
-            pk.pack_nil();
+            response["error"] = nullptr;
         } else {
             LOG4CPLUS_ERROR(client_logger(), "client.write failed: " << IedClientError_toString(error));
-            ipc::codec::pack_error(pk, IedClientError_toString(error));
+            response["error"] = ipc::codec::make_error(IedClientError_toString(error));
         }
         return true;
     }
@@ -557,31 +456,24 @@ class ClientListInstancesAction final : public ActionHandler {
 public:
     const char* name() const override { return "client.list_instances"; }
 
-    bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) override {
+    bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
         LOG4CPLUS_DEBUG(client_logger(), "client.list_instances requested");
 
-        pk.pack("result");
-        pk.pack_map(1);
-        pk.pack("instances");
-        pk.pack_array(ctx.context.client_instances.size());
-
+        nlohmann::json instances = nlohmann::json::array();
         for (const auto& entry : ctx.context.client_instances) {
             const auto& id = entry.first;
             const auto& inst = entry.second;
-            pk.pack_map(4);
-            pk.pack("instance_id");
-            pk.pack(id);
-            pk.pack("state");
-            pk.pack(inst->connected ? "CONNECTED" : "DISCONNECTED");
-            pk.pack("target_host");
-            pk.pack(inst->target_host);
-            pk.pack("target_port");
-            pk.pack(inst->target_port);
+            instances.push_back({
+                {"instance_id", id},
+                {"state", inst->connected ? "CONNECTED" : "DISCONNECTED"},
+                {"target_host", inst->target_host},
+                {"target_port", inst->target_port},
+            });
         }
 
-        pk.pack("error");
-        pk.pack_nil();
+        response["result"] = {{"instances", instances}};
+        response["error"] = nullptr;
         return true;
     }
 };

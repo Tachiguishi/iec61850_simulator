@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../core_context.hpp"
-#include <msgpack.hpp>
 #include <string>
 
 namespace ipc::actions {

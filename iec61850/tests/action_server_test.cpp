@@ -2,14 +2,12 @@
 
 #include "action/action.hpp"
 #include "logger.hpp"
-#include "msgpack_codec.hpp"
+#include "nlohmann_json.hpp"
 #include "test_helpers.hpp"
 
 #include <iec61850_dynamic_model.h>
 #include <iec61850_model.h>
-#include <msgpack.hpp>
 
-#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_set>
@@ -17,91 +15,20 @@
 
 namespace {
 
-msgpack::object_handle pack_map(const std::function<void(msgpack::packer<msgpack::sbuffer>&)>& pack_fn,
-                                msgpack::sbuffer& buffer) {
-    msgpack::packer<msgpack::sbuffer> pk(&buffer);
-    pack_fn(pk);
-    return msgpack::unpack(buffer.data(), buffer.size());
-}
-
-msgpack::object_handle make_payload(const std::function<void(msgpack::packer<msgpack::sbuffer>&)>& pack_fn) {
-    msgpack::sbuffer buffer;
-    return pack_map(pack_fn, buffer);
-}
-
-msgpack::object_handle execute_action(
-    const std::string& action,
-    BackendContext& context,
-    const msgpack::object& payload,
-    bool has_payload,
-    msgpack::object& out_response) {
-    msgpack::sbuffer request_buffer;
-    msgpack::packer<msgpack::sbuffer> pk(&request_buffer);
-
-    pk.pack_map(has_payload ? 3 : 2);
-    pk.pack("id");
-    pk.pack("test-id");
-    pk.pack("method");
-    pk.pack(action);
-    if (has_payload) {
-        pk.pack("params");
-        pk.pack(payload);
-    }
-
-    std::string request_bytes(request_buffer.data(), request_buffer.size());
-    std::string response_bytes = ipc::actions::handle_action(request_bytes, context);
-    try {
-        auto response_handle = msgpack::unpack(response_bytes.data(), response_bytes.size());
-        out_response = response_handle.get();
-        return response_handle;
-    } catch (const std::exception& ex) {
-        std::cerr << "msgpack::unpack failed: " << ex.what() << std::endl;
-        std::cerr << "response_bytes.size() = " << response_bytes.size() << std::endl;
-        // 打印 response_bytes 的内容
-        std::cerr << "response_bytes (hex): ";
-        for (unsigned char c : response_bytes) {
-            std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)c << " ";
-        }
-        std::cerr << std::dec << std::endl;
-        
-        std::cerr << "response_bytes (ascii): ";
-        for (unsigned char c : response_bytes) {
-            if (std::isprint(c))
-                std::cerr << c;
-            else
-                std::cerr << ".";
-        }
-        std::cerr << std::endl;
-        throw;
-    }
-}
-
-const msgpack::object* find_key(const msgpack::object& map_obj, const std::string& key) {
-    return ipc::codec::find_key(map_obj, key);
-}
-
-std::string get_error_message(const msgpack::object& response) {
-    const msgpack::object* error_obj = find_key(response, "error");
-    if (!error_obj || error_obj->type != msgpack::type::MAP) {
+std::string get_error_message(const nlohmann::json& response) {
+    auto error_it = response.find("error");
+    if (error_it == response.end() || error_it->is_null() || !error_it->is_object()) {
         return "";
     }
-    const msgpack::object* msg_obj = find_key(*error_obj, "message");
-    if (!msg_obj) {
-        return "";
-    }
-    return ipc::codec::as_string(*msg_obj, "");
+    return error_it->value("message", "");
 }
 
-bool get_success_flag(const msgpack::object& response) {
-    const msgpack::object* result_obj = find_key(response, "result");
-    if (!result_obj || result_obj->type != msgpack::type::MAP) {
+bool get_success_flag(const nlohmann::json& response) {
+    auto result_it = response.find("result");
+    if (result_it == response.end() || !result_it->is_object()) {
         return false;
     }
-    const msgpack::object* success_obj = find_key(*result_obj, "success");
-    if (!success_obj || success_obj->type != msgpack::type::BOOLEAN) {
-        return false;
-    }
-    return success_obj->via.boolean;
+    return result_it->value("success", false);
 }
 
 void assert_fcdas(DataSet* data_set, const std::unordered_set<std::string>& expected) {
@@ -144,32 +71,25 @@ BackendContext ActionServerSharedContextTest::context;
 
 TEST(ActionServer, StartMissingPayloadReturnsError) {
     BackendContext context;
-    msgpack::object dummy;
-    msgpack::object response;
-
-    execute_action("server.start", context, dummy, false, response);
+    nlohmann::json response = execute_action_json("server.start", context);
 
     EXPECT_EQ(get_error_message(response), "Missing payload");
 }
 
 TEST(ActionServer, LoadModelMissingPayloadReturnsError) {
     BackendContext context;
-    msgpack::object dummy;
-    msgpack::object response;
-
-    execute_action("server.load_model", context, dummy, false, response);
+    nlohmann::json response = execute_action_json("server.load_model", context);
 
     EXPECT_EQ(get_error_message(response), "Missing payload");
 }
 
 TEST_F(ActionServerSharedContextTest, LoadDefaultModelReturnsSuccess) {
 
-    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+        auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
       pack_default_model_payload(pk);
     });
 
-    msgpack::object response;
-    execute_action("server.load_model", context, payload_handle.get(), true, response);
+        nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -177,12 +97,11 @@ TEST_F(ActionServerSharedContextTest, LoadDefaultModelReturnsSuccess) {
 
 TEST_F(ActionServerSharedContextTest, LoadReportModelReturnsSuccess) {
 
-    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
         pack_payload_from_json_file(pk, "report_goose_ied.json");
     });
 
-    msgpack::object response;
-    execute_action("server.load_model", context, payload_handle.get(), true, response);
+    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -266,12 +185,11 @@ TEST_F(ActionServerSharedContextTest, LoadReportModelReturnsSuccess) {
 
 TEST_F(ActionServerSharedContextTest, LoadControlModelReturnsSuccess) {
 
-    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
         pack_payload_from_json_file(pk, "control_ied.json");
     });
 
-    msgpack::object response;
-    execute_action("server.load_model", context, payload_handle.get(), true, response);
+    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -330,12 +248,11 @@ TEST_F(ActionServerSharedContextTest, LoadControlModelReturnsSuccess) {
 
 TEST_F(ActionServerSharedContextTest, LoadSettingGroupModelReturnsSuccess) {
 
-    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
         pack_payload_from_json_file(pk, "setting_group_ied.json");
     });
 
-    msgpack::object response;
-    execute_action("server.load_model", context, payload_handle.get(), true, response);
+    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -379,7 +296,7 @@ TEST_F(ActionServerSharedContextTest, LoadSettingGroupModelReturnsSuccess) {
 TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
     BackendContext context;
 
-    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
         pk.pack_map(3);
         pk.pack("instance_id");
         pk.pack("default_instance");
@@ -389,8 +306,7 @@ TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
         pk.pack(1);
     });
 
-    msgpack::object response;
-    execute_action("server.set_data_value", context, payload_handle.get(), true, response);
+    nlohmann::json response = execute_action_json("server.set_data_value", context, payload_handle.get());
 
     EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, reference, or value");
 }
@@ -398,7 +314,7 @@ TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
 TEST(ActionServer, GetValuesInvalidRequestReturnsError) {
     BackendContext context;
 
-    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
         pk.pack_map(2);
         pk.pack("instance_id");
         pk.pack("default_instance");
@@ -407,8 +323,7 @@ TEST(ActionServer, GetValuesInvalidRequestReturnsError) {
         pk.pack("PROT/XCBR1.Pos.stVal");
     });
 
-    msgpack::object response;
-    execute_action("server.get_values", context, payload_handle.get(), true, response);
+    nlohmann::json response = execute_action_json("server.get_values", context, payload_handle.get());
 
     EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, or references array");
 }
@@ -418,43 +333,39 @@ TEST(ActionServer, GetClientsReturnsPayload) {
     ServerInstanceContext* server = context.get_or_create_server_instance("server-1");
     server->clients.push_back({"client-1", "2026-01-31T00:00:00Z"});
 
-    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
         pk.pack_map(1);
         pk.pack("instance_id");
         pk.pack("server-1");
     });
 
-    msgpack::object response;
-    execute_action("server.get_clients", context, payload_handle.get(), true, response);
+    nlohmann::json response = execute_action_json("server.get_clients", context, payload_handle.get());
 
-    const msgpack::object* payload_obj = find_key(response, "result");
-    ASSERT_TRUE(payload_obj);
-    const msgpack::object* clients_obj = find_key(*payload_obj, "clients");
-    ASSERT_TRUE(clients_obj);
-    ASSERT_EQ(clients_obj->type, msgpack::type::ARRAY);
-    EXPECT_EQ(clients_obj->via.array.size, 1u);
+    ASSERT_TRUE(response.contains("result"));
+    ASSERT_TRUE(response["result"].contains("clients"));
+    ASSERT_TRUE(response["result"]["clients"].is_array());
+    EXPECT_EQ(response["result"]["clients"].size(), 1u);
 }
 
 TEST(ActionServer, LoadModelAndStartServerReturnsSuccess) {
     BackendContext context;
 
-    auto payload_handle = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
         pack_payload_from_json_file(pk, "report_goose_ied.json");
     });
 
-    msgpack::object response;
-    execute_action("server.load_model", context, payload_handle.get(), true, response);
+    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
 
-    auto start_payload = make_payload([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto start_payload = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
         pk.pack_map(1);
         pk.pack("instance_id");
         pk.pack("default_instance");
     });
 
-    execute_action("server.start", context, start_payload.get(), true, response);
+    response = execute_action_json("server.start", context, start_payload.get());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");

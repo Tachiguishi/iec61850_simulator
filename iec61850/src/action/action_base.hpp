@@ -2,7 +2,7 @@
 
 #include "../core_context.hpp"
 
-#include <msgpack.hpp>
+#include "nlohmann_json.hpp"
 
 #include <string>
 
@@ -11,7 +11,7 @@ namespace ipc::actions {
 struct ActionContext {
 	const std::string& action;
 	BackendContext& context;
-	const msgpack::object& payload;
+	const nlohmann::json& payload;
 	bool has_payload;
 };
 
@@ -19,17 +19,17 @@ class ActionHandler {
 public:
 	virtual ~ActionHandler() = default;
 	virtual const char* name() const = 0;
-	virtual bool handle(ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk) = 0;
+	virtual bool handle(ActionContext& ctx, nlohmann::json& response) = 0;
 
 protected:
-	bool ensure_payload_map(const ActionContext& ctx, msgpack::packer<msgpack::sbuffer>& pk);
-	void pack_error_response(msgpack::packer<msgpack::sbuffer>& pk, const std::string& error_msg);
+	bool ensure_payload_map(const ActionContext& ctx, nlohmann::json& response);
+	void pack_error_response(nlohmann::json& response, const std::string& error_msg);
 	std::string validate_and_extract_instance_id(
-	const msgpack::object& payload,
+	const nlohmann::json& payload,
 	const std::string& action,
-	msgpack::packer<msgpack::sbuffer>& pk,
+	nlohmann::json& response,
 	bool& error_occurred);
-	std::string extract_instance_id(const msgpack::object& payload);
+	std::string extract_instance_id(const nlohmann::json& payload);
 };
 
 } // namespace ipc::actions
