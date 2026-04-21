@@ -427,7 +427,7 @@ TEST(ActionServer, GetClientsReturnsPayload) {
     msgpack::object response;
     execute_action("server.get_clients", context, payload_handle.get(), true, response);
 
-    const msgpack::object* payload_obj = find_key(response, "payload");
+    const msgpack::object* payload_obj = find_key(response, "result");
     ASSERT_TRUE(payload_obj);
     const msgpack::object* clients_obj = find_key(*payload_obj, "clients");
     ASSERT_TRUE(clients_obj);

@@ -1,6 +1,6 @@
 #include "test_helpers.hpp"
 
-#include "nlohmann_json.hpp"
+#include "msgpack_codec.hpp"
 
 #include <fstream>
 #include <stdexcept>
@@ -878,10 +878,9 @@ void pack_payload_from_json_file(msgpack::packer<msgpack::sbuffer>& pk, const st
   nlohmann::json payload;
   input >> payload;
 
-  pk.pack_map(2);
-  pk.pack("instance_id");
-  pk.pack("default_instance");
-  pk.pack("model");
+  nlohmann::json response_json;
+  response_json["instance_id"] = "default_instance";
+  response_json["model"] = payload;
 
   const auto pack_json = [&pk](const nlohmann::json& value, const auto& self) -> void {
     if (value.is_null()) {
@@ -927,5 +926,5 @@ void pack_payload_from_json_file(msgpack::packer<msgpack::sbuffer>& pk, const st
     throw std::runtime_error("Unsupported JSON value while packing msgpack");
   };
 
-  pack_json(payload, pack_json);
+  pack_json(response_json, pack_json);
 }

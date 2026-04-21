@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nlohmann_json.hpp"
 #include <msgpack.hpp>
 
 #include <string>
@@ -15,6 +16,9 @@ struct Request {
 };
 
 Request decode_request(const std::string& bytes);
+const msgpack::object_handle encode_response(nlohmann::json& response_json);
+
+void encode_msgpack_from_json(const nlohmann::json& json, msgpack::packer<msgpack::sbuffer>& pk);
 
 const msgpack::object* find_key(const msgpack::object& map_obj, const std::string& key);
 std::string as_string(const msgpack::object& obj, const std::string& fallback = "");

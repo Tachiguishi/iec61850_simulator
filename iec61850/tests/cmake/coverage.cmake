@@ -19,10 +19,14 @@ function(enable_coverage_for target_name)
       COMMAND ${LCOV_EXECUTABLE} --directory . --capture --output-file coverage.info
               --ignore-errors mismatch
               --rc geninfo_unexecuted_blocks=1
+              --exclude '/usr/*'
+              --exclude '${CMAKE_BINARY_DIR}/_deps/*'
+              --exclude '${CMAKE_SOURCE_DIR}/tests/*'
+              --exclude '${CMAKE_SOURCE_DIR}/include/*'
       COMMAND ${LCOV_EXECUTABLE} --remove coverage.info
-              '/usr/*'
-              '${CMAKE_BINARY_DIR}/_deps/*'
-              '${CMAKE_SOURCE_DIR}/tests/*'
+              # '/usr/*'
+              # '${CMAKE_BINARY_DIR}/_deps/*'
+              # '${CMAKE_SOURCE_DIR}/tests/*'
               --output-file coverage.info
       COMMAND ${GENHTML_EXECUTABLE} coverage.info --output-directory coverage-report
       WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

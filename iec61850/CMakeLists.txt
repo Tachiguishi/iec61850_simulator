@@ -51,6 +51,7 @@ include_directories(
 	${libiec61850_SOURCE_DIR}/src/logging
 	${libiec61850_SOURCE_DIR}/hal/inc
 	${msgpack_SOURCE_DIR}/include
+	${CMAKE_SOURCE_DIR}/include
 )
 
 # Find libnl
