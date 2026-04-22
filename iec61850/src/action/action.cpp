@@ -25,7 +25,7 @@ ActionRegistry& get_registry() {
 } // namespace
 
 bool ActionHandler::ensure_payload_map(const ActionContext& ctx, nlohmann::json& response) {
-    if (!ctx.has_payload || !ctx.payload.is_object()) {
+    if (ctx.payload.is_null()) {
         LOG4CPLUS_ERROR(server_logger(), ctx.action << " missing payload");
         pack_error_response(response, "Missing payload");
         return false;
@@ -81,7 +81,7 @@ std::string handle_action(const std::string& request_bytes, BackendContext& cont
     LOG4CPLUS_INFO(core_logger(), "IPC action: " << request.action << " id=" << request.id);
 
     response["id"] = request.id;
-    ActionContext ctx{request.action, context, request.payload, request.has_payload};
+    ActionContext ctx{request.action, context, request.payload};
     ActionHandler* handler = get_registry().find(request.action);
     if (!handler) {
         LOG4CPLUS_WARN(core_logger(), "Unknown action: " << request.action);

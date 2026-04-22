@@ -150,7 +150,7 @@ namespace ipc::actions {
 
 class ServerStartAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.start"; }
+    ActionMethod name() const override { return ActionMethod::ServerStart; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {
@@ -237,7 +237,7 @@ public:
 
 class ServerStopAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.stop"; }
+    ActionMethod name() const override { return ActionMethod::ServerStop; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {
@@ -269,7 +269,7 @@ public:
 
 class ServerRemoveAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.remove"; }
+    ActionMethod name() const override { return ActionMethod::ServerRemove; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {
@@ -323,7 +323,7 @@ public:
 
 class ServerSetDataValueAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.set_data_value"; }
+    ActionMethod name() const override { return ActionMethod::ServerSetDataValue; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {
@@ -366,7 +366,7 @@ public:
 
 class ServerGetValuesAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.get_values"; }
+    ActionMethod name() const override { return ActionMethod::ServerGetValues; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {
@@ -413,7 +413,7 @@ public:
 
 class ServerGetClientsAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.get_clients"; }
+    ActionMethod name() const override { return ActionMethod::ServerGetClients; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {
@@ -449,7 +449,7 @@ public:
 
 class ServerListInstancesAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.list_instances"; }
+    ActionMethod name() const override { return ActionMethod::ServerListInstances; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {
@@ -479,7 +479,7 @@ public:
 
 class ServerGetInterfacesAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.get_interfaces"; }
+    ActionMethod name() const override { return ActionMethod::ServerGetInterfaces; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {
@@ -520,7 +520,7 @@ public:
 
 class ServerSetInterfaceAction final : public ActionHandler {
 public:
-    const char* name() const override { return "server.set_interface"; }
+    ActionMethod name() const override { return ActionMethod::ServerSetInterface; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!ensure_payload_map(ctx, response)) {

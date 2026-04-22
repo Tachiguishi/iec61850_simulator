@@ -4,7 +4,7 @@ namespace ipc::actions {
 
 class ServerLoadModelAction final : public ActionHandler {
 public:
-	const char* name() const override { return "server.load_model"; }
+	ActionMethod name() const override { return ActionMethod::ServerLoadModel; }
 	bool handle(ActionContext& ctx, nlohmann::json& response) override;
 };
 

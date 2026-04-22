@@ -3,12 +3,47 @@
 
 ## 基础流程
 
+### 载入模型 server.load_model
 ```mermaid
 sequenceDiagram;
+    autonumber
     participant UI
     participant Server
+    participant Action
     UI->>Server: 发送Model数据
+    Note right of UI: server.load_model
+    opt 已有Model
+        Server->>+Action: 删除已有Model数据
+        Action->>-Server: 删除完成
+    end
+    Server->>+Action: 生成
+    Action->>-Server: 载入完成
     Server->>UI: 载入完成
+```
+
+测试用例:
+ActionServer.
+  StartMissingPayloadReturnsError
+  LoadModelMissingPayloadReturnsError
+  SetDataValueInvalidRequestReturnsError
+  GetValuesInvalidRequestReturnsError
+  GetClientsReturnsPayload
+  LoadModelAndStartServerReturnsSuccess
+
+- 载入一个Model数据，验证载入完成
+  * `ActionServerSharedContextTest.LoadDefaultModelReturnsSuccess`
+- 载入一个Model数据后再载入另一个Model数据，验证旧数据被删除且新数据载入完成
+  * `ActionServerSharedContextTest.LoadReportModelReturnsSuccess`
+  * `ActionServerSharedContextTest.LoadControlModelReturnsSuccess`
+  * `ActionServerSharedContextTest.LoadSettingGroupModelReturnsSuccess`
+
+### 启动服务 server.start
+```mermaid
+sequenceDiagram;
+    autonumber
+    participant UI
+    participant Server
+    participant Action
     UI->>Server: 启动服务
     Server->>UI: 服务启动完成
     loop 连接状态变更

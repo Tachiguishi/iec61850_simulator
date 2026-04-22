@@ -69,27 +69,13 @@ BackendContext ActionServerSharedContextTest::context;
 
 } // namespace
 
-TEST(ActionServer, StartMissingPayloadReturnsError) {
-    BackendContext context;
-    nlohmann::json response = execute_action_json("server.start", context);
-
-    EXPECT_EQ(get_error_message(response), "Missing payload");
-}
-
-TEST(ActionServer, LoadModelMissingPayloadReturnsError) {
-    BackendContext context;
-    nlohmann::json response = execute_action_json("server.load_model", context);
-
-    EXPECT_EQ(get_error_message(response), "Missing payload");
-}
-
 TEST_F(ActionServerSharedContextTest, LoadDefaultModelReturnsSuccess) {
 
-        auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
+    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
       pack_default_model_payload(pk);
     });
 
-        nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
+    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -291,6 +277,13 @@ TEST_F(ActionServerSharedContextTest, LoadSettingGroupModelReturnsSuccess) {
     auto* data_node = IedModel_getModelNodeByShortObjectReference(
         server->model, "PROT/LLN0.Mod.stVal");
     EXPECT_NE(data_node, nullptr);
+}
+
+TEST(ActionServer, StartMissingPayloadReturnsError) {
+    BackendContext context;
+    nlohmann::json response = execute_action_json("server.start", context);
+
+    EXPECT_EQ(get_error_message(response), "Missing payload");
 }
 
 TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {

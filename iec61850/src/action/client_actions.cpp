@@ -177,7 +177,7 @@ namespace ipc::actions {
 
 class ClientConnectAction final : public ActionHandler {
 public:
-    const char* name() const override { return "client.connect"; }
+    ActionMethod name() const override { return ActionMethod::ClientConnect; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
@@ -245,7 +245,7 @@ public:
 
 class ClientDisconnectAction final : public ActionHandler {
 public:
-    const char* name() const override { return "client.disconnect"; }
+    ActionMethod name() const override { return ActionMethod::ClientDisconnect; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
@@ -273,7 +273,7 @@ public:
 
 class ClientBrowseAction final : public ActionHandler {
 public:
-    const char* name() const override { return "client.browse"; }
+    ActionMethod name() const override { return ActionMethod::ClientBrowse; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
@@ -304,7 +304,7 @@ public:
 
 class ClientReadAction final : public ActionHandler {
 public:
-    const char* name() const override { return "client.read"; }
+    ActionMethod name() const override { return ActionMethod::ClientRead; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
@@ -336,7 +336,7 @@ public:
 
 class ClientReadBatchAction final : public ActionHandler {
 public:
-    const char* name() const override { return "client.read_batch"; }
+    ActionMethod name() const override { return ActionMethod::ClientReadBatch; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
@@ -374,7 +374,7 @@ public:
 
 class ClientWriteAction final : public ActionHandler {
 public:
-    const char* name() const override { return "client.write"; }
+    ActionMethod name() const override { return ActionMethod::ClientWrite; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);
@@ -454,7 +454,7 @@ public:
 
 class ClientListInstancesAction final : public ActionHandler {
 public:
-    const char* name() const override { return "client.list_instances"; }
+    ActionMethod name() const override { return ActionMethod::ClientListInstances; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         std::lock_guard<std::mutex> lock(ctx.context.mutex);

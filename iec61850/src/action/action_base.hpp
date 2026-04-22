@@ -8,17 +8,37 @@
 
 namespace ipc::actions {
 
+enum class ActionMethod {
+	ServerStart,
+	ServerStop,
+	ServerRemove,
+	ServerLoadModel,
+	ServerSetDataValue,
+	ServerGetValues,
+	ServerGetClients,
+	ServerListInstances,
+	ServerGetInterfaces,
+	ServerSetInterface,
+
+	ClientConnect,
+	ClientDisconnect,
+	ClientBrowse,
+	ClientRead,
+	ClientReadBatch,
+	ClientWrite,
+	ClientListInstances,
+};
+
 struct ActionContext {
 	const std::string& action;
 	BackendContext& context;
 	const nlohmann::json& payload;
-	bool has_payload;
 };
 
 class ActionHandler {
 public:
 	virtual ~ActionHandler() = default;
-	virtual const char* name() const = 0;
+	virtual ActionMethod name() const = 0;
 	virtual bool handle(ActionContext& ctx, nlohmann::json& response) = 0;
 
 protected:
