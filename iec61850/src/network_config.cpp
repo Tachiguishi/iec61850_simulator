@@ -154,7 +154,7 @@ std::vector<InterfaceInfo> get_network_interfaces() {
     // 转换为vector，排除loopback
     interfaces.reserve(iface_map.size());
     for (const auto& [name, info] : iface_map) {
-        if (name != "lo") {
+        if (name != "lo" && name.find("br-") != 0 && name.find("docker") != 0 && name.find("heiyu") != 0) {
             interfaces.push_back(info);
         }
     }

@@ -316,7 +316,14 @@ TEST(ActionServer, LoadModelAndStartServerReturnsSuccess) {
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
 
-    response = execute_action_json("server.start", context, {{"instance_id", "default_instance"}});
+    response = execute_action_json("server.start", context, {
+        {"instance_id", "default_instance"},
+        {"config", {
+            {"ip_address", "192.168.8.100"},
+            {"port", 102},
+            {"max_connections", 5},
+        }}
+    });
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");

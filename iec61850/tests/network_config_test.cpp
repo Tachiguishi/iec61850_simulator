@@ -24,13 +24,9 @@ protected:
 			return;
 		}
 		auto interfaces = network::get_network_interfaces();
-		for (const auto& iface : interfaces) {
-			if (iface.name.find("br-") != 0 && iface.name.find("docker") != 0) {
-				test_interface = iface.name;
-				break;
-			}
-		}
-		ASSERT_FALSE(test_interface.empty()) << "No valid test interface found";
+		ASSERT_FALSE(interfaces.empty()) << "No valid network interfaces found for testing";
+		test_interface = interfaces[0].name;
+		std::cout << "Using interface '" << test_interface << "' for testing" << std::endl;
 	}
 };
 
