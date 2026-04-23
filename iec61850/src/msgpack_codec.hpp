@@ -11,7 +11,6 @@ struct Request {
     std::string id;
     std::string action;
     nlohmann::json payload;
-    bool has_payload = false;
 };
 
 Request decode_request(const std::string& bytes);

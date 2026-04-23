@@ -79,7 +79,18 @@ int main(int argc, char** argv) {
     auto* context = new BackendContext();
 
     ipc::IpcServer server(socket_path, [context](const std::string& request_bytes) {
-        return ipc::actions::handle_action(request_bytes, *context);
+        ipc::codec::Request request;
+        nlohmann::json error_response = nlohmann::json::object();
+        try {
+            request = ipc::codec::decode_request(request_bytes);
+        } catch (const std::exception& exc) {
+            LOG4CPLUS_ERROR(core_logger(), "Decode error: " << exc.what());
+            error_response["id"] = "";
+            error_response["result"] = nlohmann::json::object();
+            error_response["error"] = ipc::codec::make_error(std::string("Decode error: ") + exc.what());
+            return ipc::codec::encode_response_bytes(error_response);
+        }
+        return ipc::actions::handle_action(request, *context);
     });
 
     if (!server.start()) {

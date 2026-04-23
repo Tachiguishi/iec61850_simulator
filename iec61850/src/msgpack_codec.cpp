@@ -64,7 +64,6 @@ Request decode_request(const std::string& bytes) {
     }
     if (auto payload_ptr = find_key(root_json, "params")) {
         req.payload = *payload_ptr;
-        req.has_payload = true;
     }
 
     return req;

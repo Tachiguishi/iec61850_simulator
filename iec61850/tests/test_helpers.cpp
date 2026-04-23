@@ -99,30 +99,14 @@ nlohmann::json unpack_msgpack_bytes_to_json(const std::string& bytes) {
   }
 }
 
-nlohmann::json execute_action_json(const std::string& action, BackendContext& context) {
-  msgpack::object dummy;
-  return execute_action_json(action, context, dummy, false);
-}
-
 nlohmann::json execute_action_json(const std::string& action,
                                   BackendContext& context,
-                                  const msgpack::object& payload,
-                                  bool has_payload) {
-  msgpack::sbuffer request_buffer;
-  msgpack::packer<msgpack::sbuffer> pk(&request_buffer);
-
-  pk.pack_map(has_payload ? 3 : 2);
-  pk.pack("id");
-  pk.pack("test-id");
-  pk.pack("method");
-  pk.pack(action);
-  if (has_payload) {
-    pk.pack("params");
-    pk.pack(payload);
-  }
-
-  std::string request_bytes(request_buffer.data(), request_buffer.size());
-  std::string response_bytes = ipc::actions::handle_action(request_bytes, context);
+                                  const nlohmann::json& payload) {
+  ipc::codec::Request request;
+  request.id = "test-id";
+  request.action = action;
+  request.payload = payload;
+  std::string response_bytes = ipc::actions::handle_action(request, context);
   return unpack_msgpack_bytes_to_json(response_bytes);
 }
 
@@ -977,6 +961,35 @@ void pack_default_model_payload(msgpack::packer<msgpack::sbuffer>& pk) {
     pk.pack_map(0);
     pk.pack("setting_group_control");
     pk.pack_nil();
+}
+
+nlohmann::json get_default_model_payload() {
+  msgpack::sbuffer buf;
+  msgpack::packer<msgpack::sbuffer> pk(&buf);
+  pack_default_model_payload(pk);
+  std::vector<std::uint8_t> raw(buf.data(), buf.data() + buf.size());
+  return nlohmann::json::from_msgpack(raw);
+}
+
+nlohmann::json load_model_payload_from_file(const std::string& model_path) {
+  char buffer[PATH_MAX] = {0};
+  ssize_t len = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+  std::filesystem::path json_path = model_path;
+  if (len > 0) {
+    buffer[len] = '\0';
+    std::filesystem::path exe_path(buffer);
+    json_path = exe_path.parent_path() / model_path;
+  }
+  std::ifstream input(json_path);
+  if (!input.is_open()) {
+    throw std::runtime_error("Failed to open JSON file: " + model_path);
+  }
+  nlohmann::json payload;
+  input >> payload;
+  nlohmann::json result;
+  result["instance_id"] = "default_instance";
+  result["model"] = payload;
+  return result;
 }
 
 void pack_payload_from_json_file(msgpack::packer<msgpack::sbuffer>& pk, const std::string& model_path){

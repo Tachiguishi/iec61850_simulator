@@ -153,7 +153,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerStart; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 
@@ -240,7 +240,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerStop; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 
@@ -272,7 +272,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerRemove; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 
@@ -326,7 +326,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerSetDataValue; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 
@@ -369,7 +369,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerGetValues; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 
@@ -416,7 +416,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerGetClients; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 
@@ -452,7 +452,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerListInstances; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 
@@ -482,7 +482,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerGetInterfaces; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 
@@ -523,7 +523,7 @@ public:
     ActionMethod name() const override { return ActionMethod::ServerSetInterface; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
-        if (!ensure_payload_map(ctx, response)) {
+        if (!check_payload_existence(ctx, response)) {
             return true;
         }
 

@@ -71,11 +71,7 @@ BackendContext ActionServerSharedContextTest::context;
 
 TEST_F(ActionServerSharedContextTest, LoadDefaultModelReturnsSuccess) {
 
-    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-      pack_default_model_payload(pk);
-    });
-
-    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
+        nlohmann::json response = execute_action_json("server.load_model", context, get_default_model_payload());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -83,11 +79,7 @@ TEST_F(ActionServerSharedContextTest, LoadDefaultModelReturnsSuccess) {
 
 TEST_F(ActionServerSharedContextTest, LoadReportModelReturnsSuccess) {
 
-    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pack_payload_from_json_file(pk, "report_goose_ied.json");
-    });
-
-    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
+    nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("report_goose_ied.json"));
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -171,11 +163,7 @@ TEST_F(ActionServerSharedContextTest, LoadReportModelReturnsSuccess) {
 
 TEST_F(ActionServerSharedContextTest, LoadControlModelReturnsSuccess) {
 
-    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pack_payload_from_json_file(pk, "control_ied.json");
-    });
-
-    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
+    nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("control_ied.json"));
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -234,11 +222,7 @@ TEST_F(ActionServerSharedContextTest, LoadControlModelReturnsSuccess) {
 
 TEST_F(ActionServerSharedContextTest, LoadSettingGroupModelReturnsSuccess) {
 
-    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pack_payload_from_json_file(pk, "setting_group_ied.json");
-    });
-
-    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
+    nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("setting_group_ied.json"));
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
@@ -289,17 +273,12 @@ TEST(ActionServer, StartMissingPayloadReturnsError) {
 TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
     BackendContext context;
 
-    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pk.pack_map(3);
-        pk.pack("instance_id");
-        pk.pack("default_instance");
-        pk.pack("reference");
-        pk.pack("PROT/XCBR1.Pos.stVal");
-        pk.pack("value");
-        pk.pack(1);
-    });
-
-    nlohmann::json response = execute_action_json("server.set_data_value", context, payload_handle.get());
+    nlohmann::json payload = {
+        {"instance_id", "default_instance"},
+        {"reference", "PROT/XCBR1.Pos.stVal"},
+        {"value", 1}
+    };
+    nlohmann::json response = execute_action_json("server.set_data_value", context, payload);
 
     EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, reference, or value");
 }
@@ -307,16 +286,11 @@ TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
 TEST(ActionServer, GetValuesInvalidRequestReturnsError) {
     BackendContext context;
 
-    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pk.pack_map(2);
-        pk.pack("instance_id");
-        pk.pack("default_instance");
-        pk.pack("references");
-        pk.pack_array(1);
-        pk.pack("PROT/XCBR1.Pos.stVal");
-    });
-
-    nlohmann::json response = execute_action_json("server.get_values", context, payload_handle.get());
+    nlohmann::json payload = {
+        {"instance_id", "default_instance"},
+        {"references", nlohmann::json::array({"PROT/XCBR1.Pos.stVal"})}
+    };
+    nlohmann::json response = execute_action_json("server.get_values", context, payload);
 
     EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, or references array");
 }
@@ -326,13 +300,7 @@ TEST(ActionServer, GetClientsReturnsPayload) {
     ServerInstanceContext* server = context.get_or_create_server_instance("server-1");
     server->clients.push_back({"client-1", "2026-01-31T00:00:00Z"});
 
-    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pk.pack_map(1);
-        pk.pack("instance_id");
-        pk.pack("server-1");
-    });
-
-    nlohmann::json response = execute_action_json("server.get_clients", context, payload_handle.get());
+    nlohmann::json response = execute_action_json("server.get_clients", context, {{"instance_id", "server-1"}});
 
     ASSERT_TRUE(response.contains("result"));
     ASSERT_TRUE(response["result"].contains("clients"));
@@ -343,22 +311,12 @@ TEST(ActionServer, GetClientsReturnsPayload) {
 TEST(ActionServer, LoadModelAndStartServerReturnsSuccess) {
     BackendContext context;
 
-    auto payload_handle = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pack_payload_from_json_file(pk, "report_goose_ied.json");
-    });
-
-    nlohmann::json response = execute_action_json("server.load_model", context, payload_handle.get());
+    nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("report_goose_ied.json"));
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
 
-    auto start_payload = pack_msgpack_object([](msgpack::packer<msgpack::sbuffer>& pk) {
-        pk.pack_map(1);
-        pk.pack("instance_id");
-        pk.pack("default_instance");
-    });
-
-    response = execute_action_json("server.start", context, start_payload.get());
+    response = execute_action_json("server.start", context, {{"instance_id", "default_instance"}});
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");

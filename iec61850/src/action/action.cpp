@@ -24,7 +24,7 @@ ActionRegistry& get_registry() {
 
 } // namespace
 
-bool ActionHandler::ensure_payload_map(const ActionContext& ctx, nlohmann::json& response) {
+bool ActionHandler::check_payload_existence(const ActionContext& ctx, nlohmann::json& response) {
     if (ctx.payload.is_null()) {
         LOG4CPLUS_ERROR(server_logger(), ctx.action << " missing payload");
         pack_error_response(response, "Missing payload");
@@ -64,19 +64,8 @@ std::string ActionHandler::extract_instance_id(const nlohmann::json& payload) {
     return "";
 }
 
-std::string handle_action(const std::string& request_bytes, BackendContext& context) {
-    ipc::codec::Request request;
+std::string handle_action(ipc::codec::Request& request, BackendContext& context) {
     nlohmann::json response = nlohmann::json::object();
-
-    try {
-        request = ipc::codec::decode_request(request_bytes);
-    } catch (const std::exception& exc) {
-        LOG4CPLUS_ERROR(core_logger(), "Decode error: " << exc.what());
-        response["id"] = "";
-        response["result"] = nlohmann::json::object();
-        response["error"] = ipc::codec::make_error(std::string("Decode error: ") + exc.what());
-        return ipc::codec::encode_response_bytes(response);
-    }
 
     LOG4CPLUS_INFO(core_logger(), "IPC action: " << request.action << " id=" << request.id);
 

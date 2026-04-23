@@ -46,20 +46,11 @@ sequenceDiagram;
     participant Action
     UI->>Server: 启动服务
     Server->>UI: 服务启动完成
-    loop 连接状态变更
-        Server->>UI: 客户端连接状态
-    end
-    alt 请求单点数据
-        UI->>Server: 请求单点数据
-        Server->>UI: 返回单点数据
-    else 请求数据集数据
-        UI->>Server: 请求数据集数据
-        Server->>UI: 返回数据集数据
-    else 设定单点数据
-        UI->>Server: 设定单点数据
-        Server->>UI: 返回设定结果
-    end
 ```
+
+测试用例:
+- 启动服务后验证服务启动完成
+  * `ActionServer.LoadModelAndStartServerReturnsSuccess`
 
 ## 数据变更联动
 

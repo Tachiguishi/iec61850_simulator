@@ -711,7 +711,7 @@ IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& ou
 } // namespace
 
 bool ServerLoadModelAction::handle(ActionContext& ctx, nlohmann::json& response) {
-    if (!ensure_payload_map(ctx, response)) {
+    if (!check_payload_existence(ctx, response)) {
         return true;
     }
 

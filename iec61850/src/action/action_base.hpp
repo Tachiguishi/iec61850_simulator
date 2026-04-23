@@ -42,7 +42,7 @@ public:
 	virtual bool handle(ActionContext& ctx, nlohmann::json& response) = 0;
 
 protected:
-	bool ensure_payload_map(const ActionContext& ctx, nlohmann::json& response);
+	bool check_payload_existence(const ActionContext& ctx, nlohmann::json& response);
 	void pack_error_response(nlohmann::json& response, const std::string& error_msg);
 	std::string validate_and_extract_instance_id(
 	const nlohmann::json& payload,
