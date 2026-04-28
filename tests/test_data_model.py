@@ -171,8 +171,18 @@ class TestDataObject:
         attr = DataAttribute(name="stVal", data_type=DataType.INT32, value=1)
         do.add_attribute(attr)
         
-        assert "stVal" in do.attributes
+        assert do.attributes == [attr]
         assert do.get_attribute("stVal") == attr
+
+    def test_attribute_order_is_preserved(self):
+        """测试属性列表保持插入顺序"""
+        do = DataObject(name="Pos", cdc="DPC")
+        first_attr = DataAttribute(name="q", data_type=DataType.QUALITY, value=0)
+        second_attr = DataAttribute(name="stVal", data_type=DataType.INT32, value=1)
+        do.add_attribute(first_attr)
+        do.add_attribute(second_attr)
+
+        assert [attr.name for attr in do.attributes] == ["q", "stVal"]
     
     def test_get_set_value(self):
         """测试获取和设置值"""
@@ -204,8 +214,26 @@ class TestLogicalNode:
         do = DataObject(name="Pos", cdc="DPC")
         ln.add_data_object(do)
         
-        assert "Pos" in ln.data_objects
+        assert ln.data_objects == [do]
         assert ln.get_data_object("Pos") == do
+
+    def test_ordered_named_collections(self):
+        """测试逻辑节点子元素保持插入顺序并支持按名称查询"""
+        ln = LogicalNode(name="LLN0", ln_class="LLN0")
+
+        first_do = DataObject(name="Beh", cdc="ENS")
+        second_do = DataObject(name="Mod", cdc="ENC")
+        ln.add_data_object(first_do)
+        ln.add_data_object(second_do)
+
+        first_ds = DataSet(name="dsB")
+        second_ds = DataSet(name="dsA")
+        ln.add_data_set(first_ds)
+        ln.add_data_set(second_ds)
+
+        assert [item.name for item in ln.data_objects] == ["Beh", "Mod"]
+        assert [item.name for item in ln.data_sets] == ["dsB", "dsA"]
+        assert ln.get_data_set("dsA") == second_ds
     
     def test_reference_separator(self):
         """测试引用分隔符"""
@@ -309,8 +337,8 @@ class TestIED:
         assert ap in ied.access_points.values()
         assert ld in ap.logical_devices.values()
         assert ln in ld.logical_nodes.values()
-        assert do in ln.data_objects.values()
-        assert attr in do.attributes.values()
+        assert do in ln.data_objects
+        assert attr in do.attributes
     
     def test_get_data_attribute(self):
         """测试通过引用获取数据属性"""

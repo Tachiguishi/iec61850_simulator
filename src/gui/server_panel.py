@@ -267,7 +267,8 @@ class ServerPanel(QWidget):
         for ap_name, ap in self._ied.access_points.items():
             for ld_name, ld in ap.logical_devices.items():
                 for ln_name, ln in ld.logical_nodes.items():
-                    for ds_name, ds in ln.data_sets.items():
+                    for ds in ln.data_sets:
+                        ds_name = ds.name
                         # 构建完整路径
                         full_path = f"{self._ied.name}{ld_name}/{ln_name}.{ds_name}"
                         item_text = f"{ln_name}.{ds_name} ({len(ds.fcdas)} FCDAs)"
@@ -348,7 +349,8 @@ class ServerPanel(QWidget):
         properties = []
         
         # ReportControl
-        for rc_name, rc in ln.report_controls.items():
+        for rc in ln.report_controls:
+            rc_name = rc.name
             if rc.dataset == ds_name:
                 properties.extend([
                     ("=== ReportControl ===", ""),
@@ -362,7 +364,8 @@ class ServerPanel(QWidget):
                 ])
         
         # GSEControl
-        for gse_name, gse in ln.gse_controls.items():
+        for gse in ln.gse_controls:
+            gse_name = gse.name
             if gse.dataset == ds_name:
                 properties.extend([
                     ("=== GSEControl ===", ""),
@@ -375,7 +378,8 @@ class ServerPanel(QWidget):
                 ])
         
         # SampledValueControl
-        for smv_name, smv in ln.smv_controls.items():
+        for smv in ln.smv_controls:
+            smv_name = smv.name
             if smv.dataset == ds_name:
                 properties.extend([
                     ("=== SampledValueControl ===", ""),
@@ -389,7 +393,8 @@ class ServerPanel(QWidget):
                 ])
         
         # LogControl
-        for log_name, log in ln.log_controls.items():
+        for log in ln.log_controls:
+            log_name = log.name
             if log.dataset == ds_name:
                 properties.extend([
                     ("=== LogControl ===", ""),

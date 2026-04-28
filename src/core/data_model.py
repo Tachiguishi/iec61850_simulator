@@ -54,6 +54,23 @@ class IEC61850Element:
 	def _get_separator(self) -> str:
 		"""获取路径分隔符（子类可重写）"""
 		return "."
+
+	def _upsert_named_child(self, collection: List[Any], child: Any) -> Any:
+		"""按名称更新或追加子元素，同时保持插入顺序。"""
+		child._parent = self
+		for index, existing in enumerate(collection):
+			if existing.name == child.name:
+				collection[index] = child
+				return child
+		collection.append(child)
+		return child
+
+	def _get_named_child(self, collection: List[Any], name: str) -> Optional[Any]:
+		"""按名称获取子元素。"""
+		for item in collection:
+			if item.name == name:
+				return item
+		return None
 	
 	def to_dict(self) -> Dict:
 		"""转换为字典（子类应重写）"""
@@ -254,7 +271,7 @@ class DataAttribute(IEC61850Element):
 		trigger_options: 触发选项
 		quality: 质量标志
 		timestamp: 时间戳
-		attributes: 子属性字典（用于结构体类型）
+		attributes: 子属性列表（用于结构体类型，保持定义顺序）
 	"""
 	data_type: DataType = DataType.BOOLEAN
 	value: Any = None
@@ -263,7 +280,7 @@ class DataAttribute(IEC61850Element):
 	trigger_options: int = TriggerOption.DATA_CHANGE | TriggerOption.QUALITY_CHANGE
 	quality: Quality = Quality.GOOD
 	timestamp: Optional[datetime] = None
-	attributes: Dict[str, 'DataAttribute'] = field(default_factory=dict)
+	attributes: List['DataAttribute'] = field(default_factory=list)
 	
 	# 内部字段
 	_callbacks: List[Callable] = field(default_factory=list, repr=False)
@@ -300,13 +317,11 @@ class DataAttribute(IEC61850Element):
 	
 	def add_sub_attribute(self, attr: 'DataAttribute') -> 'DataAttribute':
 		"""添加子属性（用于结构体类型）"""
-		attr._parent = self
-		self.attributes[attr.name] = attr
-		return attr
+		return self._upsert_named_child(self.attributes, attr)
 	
 	def get_sub_attribute(self, name: str) -> Optional['DataAttribute']:
 		"""获取子属性"""
-		return self.attributes.get(name)
+		return self._get_named_child(self.attributes, name)
 	
 	def is_struct(self) -> bool:
 		"""判断是否为结构体类型"""
@@ -359,7 +374,7 @@ class DataAttribute(IEC61850Element):
 		
 		# 如果是结构体类型，序列化子属性
 		if self.attributes:
-			result["attributes"] = {k: v.to_dict() for k, v in self.attributes.items()}
+			result["attributes"] = [attr.to_dict() for attr in self.attributes]
 		else:
 			# 基础类型才有 value, quality, timestamp
 			result["value"] = self.value
@@ -382,29 +397,27 @@ class DataObject(IEC61850Element):
 		name: 对象名称
 		cdc: 公共数据类 (Common Data Class)
 		description: 描述
-		attributes: 数据属性或子数据对象字典
+		attributes: 数据属性或子数据对象列表，保持定义顺序
 	"""
 	cdc: str = ""  # 如 SPS, DPS, MV, CMV, etc.
-	attributes: Dict[str, Union['DataAttribute', 'DataObject']] = field(default_factory=dict)
+	attributes: List[Union['DataAttribute', 'DataObject']] = field(default_factory=list)
 	
 	def add_attribute(self, attr: Union['DataAttribute', 'DataObject']) -> Union['DataAttribute', 'DataObject']:
 		"""添加数据属性或子数据对象"""
-		attr._parent = self
-		self.attributes[attr.name] = attr
-		return attr
+		return self._upsert_named_child(self.attributes, attr)
 	
 	def get_attribute(self, name: str) -> Optional[Union['DataAttribute', 'DataObject']]:
 		"""获取数据属性或子数据对象"""
-		return self.attributes.get(name)
+		return self._get_named_child(self.attributes, name)
 	
 	def get_value(self, attr_name: str = "stVal") -> Any:
 		"""获取指定属性的值"""
-		attr = self.attributes.get(attr_name)
+		attr = self.get_attribute(attr_name)
 		return attr.value if attr else None
 	
 	def set_value(self, attr_name: str, value: Any) -> bool:
 		"""设置指定属性的值"""
-		attr = self.attributes.get(attr_name)
+		attr = self.get_attribute(attr_name)
 		if attr:
 			return attr.set_value(value)
 		return False
@@ -415,7 +428,7 @@ class DataObject(IEC61850Element):
 			"name": self.name,
 			"cdc": self.cdc,
 			"description": self.description,
-			"attributes": {k: v.to_dict() for k, v in self.attributes.items()},
+			"attributes": [attr.to_dict() for attr in self.attributes],
 		}
 
 
@@ -439,33 +452,55 @@ class LogicalNode(IEC61850Element):
 	ln_class: str = ""  # LN类型，如 PTOC, XCBR
 	ln_inst: str = ""  # 实例标识符，如 "1" 在 "PTOC1"
 	ln_type: str = ""  # LN类型标识符
-	data_objects: Dict[str, DataObject] = field(default_factory=dict)
-	data_sets: Dict[str, 'DataSet'] = field(default_factory=dict)  # 数据集
-	report_controls: Dict[str, 'ReportControl'] = field(default_factory=dict)  # 报告控制块
-	gse_controls: Dict[str, 'GSEControl'] = field(default_factory=dict)  # GSE控制块
-	smv_controls: Dict[str, 'SampledValueControl'] = field(default_factory=dict)  # 采样值控制块
-	log_controls: Dict[str, 'LogControl'] = field(default_factory=dict)  # 日志控制块
+	data_objects: List[DataObject] = field(default_factory=list)
+	data_sets: List['DataSet'] = field(default_factory=list)  # 数据集
+	report_controls: List['ReportControl'] = field(default_factory=list)  # 报告控制块
+	gse_controls: List['GSEControl'] = field(default_factory=list)  # GSE控制块
+	smv_controls: List['SampledValueControl'] = field(default_factory=list)  # 采样值控制块
+	log_controls: List['LogControl'] = field(default_factory=list)  # 日志控制块
 	setting_group_control: Optional['SettingGroupControl'] = None  # 定值组控制
 	
 	def _get_separator(self) -> str:
 		"""LogicalNode 使用 '/' 作为分隔符"""
 		return "/"
-	
+
 	def add_data_object(self, do: DataObject) -> DataObject:
 		"""添加数据对象"""
-		do._parent = self
-		self.data_objects[do.name] = do
-		return do
+		return self._upsert_named_child(self.data_objects, do)
 	
 	def get_data_object(self, name: str) -> Optional[DataObject]:
 		"""获取数据对象"""
-		return self.data_objects.get(name)
+		return self._get_named_child(self.data_objects, name)
+
+	def add_data_set(self, data_set: 'DataSet') -> 'DataSet':
+		"""添加数据集"""
+		return self._upsert_named_child(self.data_sets, data_set)
+
+	def get_data_set(self, name: str) -> Optional['DataSet']:
+		"""获取数据集"""
+		return self._get_named_child(self.data_sets, name)
+
+	def add_report_control(self, report_control: 'ReportControl') -> 'ReportControl':
+		"""添加报告控制块"""
+		return self._upsert_named_child(self.report_controls, report_control)
+
+	def add_gse_control(self, gse_control: 'GSEControl') -> 'GSEControl':
+		"""添加 GSE 控制块"""
+		return self._upsert_named_child(self.gse_controls, gse_control)
+
+	def add_smv_control(self, smv_control: 'SampledValueControl') -> 'SampledValueControl':
+		"""添加采样值控制块"""
+		return self._upsert_named_child(self.smv_controls, smv_control)
+
+	def add_log_control(self, log_control: 'LogControl') -> 'LogControl':
+		"""添加日志控制块"""
+		return self._upsert_named_child(self.log_controls, log_control)
 	
 	def get_all_attributes(self) -> List[DataAttribute]:
 		"""获取所有数据属性"""
 		attrs = []
-		for do in self.data_objects.values():
-			attrs.extend(do.attributes.values())
+		for do in self.data_objects:
+			attrs.extend(attr for attr in do.attributes if isinstance(attr, DataAttribute))
 		return attrs
 	
 	def to_dict(self) -> Dict:
@@ -474,12 +509,12 @@ class LogicalNode(IEC61850Element):
 			"name": self.name,
 			"class": self.ln_class,
 			"description": self.description,
-			"data_objects": {k: v.to_dict() for k, v in self.data_objects.items()},
-			"data_sets": {k: v.to_dict() for k, v in self.data_sets.items()},
-			"report_controls": {k: v.to_dict() for k, v in self.report_controls.items()},
-			"gse_controls": {k: v.to_dict() for k, v in self.gse_controls.items()},
-			"smv_controls": {k: v.to_dict() for k, v in self.smv_controls.items()},
-			"log_controls": {k: v.to_dict() for k, v in self.log_controls.items()},
+			"data_objects": [do.to_dict() for do in self.data_objects],
+			"data_sets": [ds.to_dict() for ds in self.data_sets],
+			"report_controls": [rc.to_dict() for rc in self.report_controls],
+			"gse_controls": [gse.to_dict() for gse in self.gse_controls],
+			"smv_controls": [smv.to_dict() for smv in self.smv_controls],
+			"log_controls": [log.to_dict() for log in self.log_controls],
 			"setting_group_control": self.setting_group_control.to_dict() if self.setting_group_control else None,
 		}
 
@@ -699,7 +734,7 @@ class LogicalDevice(IEC61850Element):
 		"""获取所有数据对象"""
 		objects = []
 		for ln in self.logical_nodes.values():
-			objects.extend(ln.data_objects.values())
+			objects.extend(ln.data_objects)
 		return objects
 	
 	def to_dict(self) -> Dict:
@@ -707,7 +742,7 @@ class LogicalDevice(IEC61850Element):
 		return {
 			"name": self.name,
 			"description": self.description,
-			"logical_nodes": {k: v.to_dict() for k, v in self.logical_nodes.items()},
+			"logical_nodes": [ln.to_dict() for ln in self.logical_nodes.values()],
 		}
 
 
@@ -943,11 +978,11 @@ class IED(IEC61850Element):
 				if not ln:
 					continue
 				
-				do = ln.data_objects.get(do_name)
+				do = ln.get_data_object(do_name)
 				if not do:
 					continue
 			
-				return do.attributes.get(da_name)
+				return do.get_attribute(da_name)
 			
 			return None
 			
@@ -960,9 +995,10 @@ class IED(IEC61850Element):
 		refs = []
 		for ld in self.get_logical_devices():
 			for ln in ld.logical_nodes.values():
-				for do in ln.data_objects.values():
-					for da in do.attributes.values():
-						refs.append(da.reference)
+				for do in ln.data_objects:
+					for da in do.attributes:
+						if isinstance(da, DataAttribute):
+							refs.append(da.reference)
 		return refs
 
 	def get_listen_ip(self, default: str = "0.0.0.0") -> str:
@@ -980,7 +1016,7 @@ class IED(IEC61850Element):
 			"model": self.model,
 			"revision": self.revision,
 			"description": self.description,
-			"logical_devices": {ld.name: ld.to_dict() for ld in self.get_logical_devices()},
+			"logical_devices": [ld.to_dict() for ld in self.get_logical_devices()],
 		}
 		# 添加通信参数 - 收集所有访问点的通信参数
 		comm_params = {}

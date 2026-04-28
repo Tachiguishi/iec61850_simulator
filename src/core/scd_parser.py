@@ -185,31 +185,31 @@ class SCDParser:
 			for dataset_elem in self._findall_elements(ln_elem, 'DataSet'):
 				ds = self._parse_data_set(dataset_elem)
 				if ds:
-					ln.data_sets[ds.name] = ds
+					ln.add_data_set(ds)
 			
 			# 解析 ReportControl
 			for rc_elem in self._findall_elements(ln_elem, 'ReportControl'):
 				rc = self._parse_report_control(rc_elem)
 				if rc:
-					ln.report_controls[rc.name] = rc
+					ln.add_report_control(rc)
 			
 			# 解析 GSEControl
 			for gse_elem in self._findall_elements(ln_elem, 'GSEControl'):
 				gse = self._parse_gse_control(gse_elem)
 				if gse:
-					ln.gse_controls[gse.name] = gse
+					ln.add_gse_control(gse)
 			
 			# 解析 SampledValueControl
 			for smv_elem in self._findall_elements(ln_elem, 'SampledValueControl'):
 				smv = self._parse_sampled_value_control(smv_elem)
 				if smv:
-					ln.smv_controls[smv.name] = smv
+					ln.add_smv_control(smv)
 			
 			# 解析 LogControl
 			for log_elem in self._findall_elements(ln_elem, 'LogControl'):
 				log = self._parse_log_control(log_elem)
 				if log:
-					ln.log_controls[log.name] = log
+					ln.add_log_control(log)
 
 			# 解析 SettingGroupControl
 			sg_elem = self._find_element(ln_elem, 'SettingControl')
