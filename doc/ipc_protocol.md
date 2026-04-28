@@ -97,31 +97,112 @@ accept_loop_threaded()
 ## 动作列表(method)
 ### Server
 - `server.start`
-  - payload: `{ instance_id?: string, config: {...} }`
-    - config 包含:
-      - `ip_address`: 服务器监听的 IP 地址（可从 SCD Communication 节点获取）
-      - `port`: 服务器监听端口（默认 102）
-      - `max_connections`: 最大连接数
-  - response.payload: `{ success: true, instance_id: string }`
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "server.start",
+  "id": "uuid",
+  "params": {
+    "instance_id": "optional_string",
+    "config": {
+      "ip_address": "string", // 服务器监听的 IP 地址（可从 SCD Communication 节点获取）
+      "port": number,       // 服务器监听端口（默认 102）
+      "max_connections": number   // 最大连接数
+    }
+  }
+},
+{
+  "jsonrpc": "2.0",
+  "id": "uuid",
+  "result": {
+    "success": true,
+    "instance_id": "string"
+  }
+}
+```
+
 - `server.stop`
-  - payload: `{ instance_id?: string }`
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "server.stop",
+  "id": "uuid",
+  "params": {
+    "instance_id": "optional_string"
+  }
+},
+{
+  "jsonrpc": "2.0",
+  "id": "uuid",
+  "result": {
+    "success": true
+  }
+}
+```
+
 - `server.load_model`
-  - payload: `{ instance_id?: string, model: {...} }`
-    - model 结构与 SCD Communication 节点相似，包含 IED、LD、LN、DO、DA 等信息
-      - `name`: IED 名称
-      - `lds`: LD 列表
-      - `communication`: 通信参数字典（按访问点名称索引）
-        - `ip_address`: IP 地址
-        - `ip_subnet`: 子网掩码
-        - `osi_ap_title`: OSI 应用进程标题
-        - `osi_ae_qualifier`: OSI 应用实体限定符
-        - `gse_addresses`: GSE 地址映射
-        - `smv_addresses`: SMV 地址映射
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "server.load_model",
+  "id": "uuid",
+  "params": {
+    "instance_id": "optional_string",
+    "model": { ... } // 模型数据结构（IED、LD、LN、DO、DA 等信息）
+  }
+},
+{
+  "jsonrpc": "2.0",
+  "id": "uuid",
+  "result": {
+    "success": true
+  }
+}
+```
+  - model 结构与 SCD Communication 节点相似，包含 IED、LD、LN、DO、DA 等信息
+    - `name`: IED 名称
+    - `lds`: LD 列表
+    - `communication`: 通信参数字典（按访问点名称索引）
+      - `ip_address`: IP 地址
+      - `ip_subnet`: 子网掩码
+      - `osi_ap_title`: OSI 应用进程标题
+      - `osi_ae_qualifier`: OSI 应用实体限定符
+      - `gse_addresses`: GSE 地址映射
+      - `smv_addresses`: SMV 地址映射
 - `server.set_data_value`
-  - payload: `{ instance_id?: string, reference: "IED1/LD0/..", value: <any> }`
-- `server.get_values`
-  - payload: `{ instance_id?: string, references: ["..."] }`
-  - response.payload: `{ values: { ref: { value, quality, timestamp } } }`
+  - payload: `{ instance_id?: string, reference: "LdName/..", value: <any> }`
+- `server.read`
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "server.read",
+  "id": "uuid",
+  "params": {
+    "instance_id": "optional_string",
+    "items": [{
+        "reference": "LDName/LNName[.Name[. ...]]",
+        "fc": "optional_FC" // 可选功能约束过滤
+      }, ...]
+  }
+},
+{
+  "jsonrpc": "2.0",
+  "id": "uuid",
+  "result": [
+    {
+      "reference": "LDName/LNName[.Name[. ...]]",
+      "fc": "FC",
+      "value": <any>,
+      "quality": "GOOD|BAD|UNCERTAIN",
+      "timestamp": "ISO8601 string",
+      "error": null | { code, message }
+    },
+    ...
+  ]
+}
+```
+
+
 - `server.get_clients`
   - payload: `{ instance_id?: string }`
   - response.payload: `{ clients: [ { id, connected_at } ] }`

@@ -7,6 +7,8 @@
 #include "../network_config.hpp"
 
 #include <iec61850_dynamic_model.h>
+#include <iec61850_server.h>
+#include <iec61850_model.h>
 
 #include <algorithm>
 #include <chrono>
@@ -44,54 +46,124 @@ void on_connection_event(IedServer, ClientConnection connection, bool connected,
     }
 }
 
-nlohmann::json attribute_value_json(IedServer server, DataAttribute* da) {
-    nlohmann::json result = {
-        {"value", nullptr},
-        {"quality", 0},
-        {"timestamp", nullptr},
-    };
+/*
+ * read reference value example:
+ * {
+ *  "reference": "LD0/LLN0$ST$Alm",
+ *  "fc": "ST"
+ * }
+ * 
+ * result:
+ * {
+ *  "stVal": true,
+ *  "q": "00000000",
+ *  "t": "2024-01-01T00:00:00Z"
+ * }
+ */
+nlohmann::json attribute_value_json(IedServer server, ModelNode* dataModel, FunctionalConstraint fc) {
+    nlohmann::json result;
 
-    if (!da) {
-        return result;
-    }
+    switch(ModelNode_getType(dataModel)) {
+        case DataAttributeModelType:{
+                MmsValue* value = IedServer_getAttributeValue(server, (DataAttribute*) dataModel);
+                switch(MmsValue_getType(value)){
+                    case MMS_ARRAY:
+                    case MMS_STRUCTURE:{
+                        LinkedList children = ModelNode_getChildren(dataModel);
+                        if(!children) {
+                            break;
+                        }
+                        uint32_t arraySize = MmsValue_getArraySize(value);
+                        for(int i = 0; i < arraySize; i++) {
+                            LinkedList current = LinkedList_get(children, i);
+                            ModelNode* child = static_cast<ModelNode*>(LinkedList_getData(current));
 
-    DataAttributeType type = DataAttribute_getType(da);
-    switch (type) {
-        case IEC61850_BOOLEAN:
-            result["value"] = IedServer_getBooleanAttributeValue(server, da);
+                            const char* name = ModelNode_getName(child);
+                            result[name] = attribute_value_json(server, child, fc);
+                        }
+
+                        LinkedList_destroyStatic(children);
+                    }
+                        break;
+                    case MMS_BOOLEAN:
+                        result = MmsValue_getBoolean(value);
+                        break;
+                    case MMS_INTEGER:
+                        result = MmsValue_toInt32(value);
+                        break;
+                    case MMS_UNSIGNED:
+                        result = MmsValue_toUint32(value);
+                        break;
+                    case MMS_FLOAT:
+                        result = MmsValue_toFloat(value);
+                        break;
+                    case MMS_OCTET_STRING:{
+                        int size = MmsValue_getOctetStringSize(value);
+                        std::string octetStringValue;
+                        octetStringValue.reserve(size * 2);
+                        for (int i = 0; i < size; i++) {
+                            char hex[3];
+                            snprintf(hex, sizeof(hex), "%02x", MmsValue_getOctetStringOctet(value, i));
+                            octetStringValue.append(hex);
+                        }
+                        result = octetStringValue;
+                    }
+                    break;
+                    case MMS_VISIBLE_STRING:
+                    case MMS_STRING:
+                        result = MmsValue_toString(value);
+                        break;
+                    case MMS_BIT_STRING:{
+                        uint32_t bitStringSize = MmsValue_getBitStringSize(value);
+                        std::string bitStringValue;
+                        bitStringValue.reserve(bitStringSize);
+                        for(int i = 0; i < bitStringSize; i++) {
+                            bool bit = MmsValue_getBitStringBit(value, i);
+                            bitStringValue.push_back(bit ? '1' : '0');
+                        }
+                        result = bitStringValue;
+                    }
+                        break;
+                    case MMS_UTC_TIME:
+                    case MMS_BINARY_TIME:{
+                        uint8_t tempBuf[24];
+                        MmsValue_printToBuffer(value, (char*) tempBuf, sizeof(tempBuf));
+                        result = std::string((char*) tempBuf);
+                    }
+                        break;
+                    default:
+                        result = {"error", "Unsupported MMS value type: " + std::string(MmsValue_getTypeString(value))};
+                        break;
+                }
+            }
             break;
-        case IEC61850_INT8:
-        case IEC61850_INT16:
-        case IEC61850_INT32:
-        case IEC61850_ENUMERATED:
-            result["value"] = IedServer_getInt32AttributeValue(server, da);
-            break;
-        case IEC61850_INT64:
-            result["value"] = IedServer_getInt64AttributeValue(server, da);
-            break;
-        case IEC61850_INT8U:
-        case IEC61850_INT16U:
-        case IEC61850_INT32U:
-            result["value"] = IedServer_getUInt32AttributeValue(server, da);
-            break;
-        case IEC61850_FLOAT32:
-            result["value"] = IedServer_getFloatAttributeValue(server, da);
-            break;
-        case IEC61850_FLOAT64:
-            result["value"] = static_cast<double>(IedServer_getFloatAttributeValue(server, da));
-            break;
-        case IEC61850_VISIBLE_STRING_32:
-        case IEC61850_VISIBLE_STRING_64:
-        case IEC61850_VISIBLE_STRING_129:
-        case IEC61850_VISIBLE_STRING_255:
-        case IEC61850_UNICODE_STRING_255: {
-            const char* str = IedServer_getStringAttributeValue(server, da);
-            result["value"] = str ? str : "";
-            break;
+        case ModelNodeType::DataObjectModelType: {
+            LinkedList children = ModelNode_getChildren(dataModel);
+            if(!children) {
+                break;
+            }
+            uint32_t childCount = LinkedList_size(children);
+            for(uint32_t i = 0; i < childCount; i++) {
+                LinkedList current = LinkedList_get(children, i);
+                ModelNode* child = static_cast<ModelNode*>(LinkedList_getData(current));
+                
+                if(ModelNode_getType(child) == DataAttributeModelType) {
+                    DataAttribute* da = reinterpret_cast<DataAttribute*>(child);
+                    if(da->fc != fc){
+                        continue;
+                    }
+                }
+
+                const char* name = ModelNode_getName(child);
+                result[name] = attribute_value_json(server, child, fc);
+            }
+            LinkedList_destroyStatic(children);
         }
-        default:
             break;
+        default:
+            return nullptr;
     }
+
     return result;
 }
 
@@ -364,9 +436,9 @@ public:
     }
 };
 
-class ServerGetValuesAction final : public ActionHandler {
+class ServerReadAction final : public ActionHandler {
 public:
-    ActionMethod name() const override { return ActionMethod::ServerGetValues; }
+    ActionMethod name() const override { return ActionMethod::ServerRead; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!check_payload_existence(ctx, response)) {
@@ -381,28 +453,45 @@ public:
             return true;
         }
 
-        auto refs_obj = ipc::codec::find_key(ctx.payload, "references");
+        auto items_obj = ipc::codec::find_key(ctx.payload, "items");
 
         auto* inst = ctx.context.get_server_instance(instance_id);
-        if (!inst || !inst->server || !inst->model || !refs_obj || !refs_obj->is_array()) {
-            LOG4CPLUS_ERROR(server_logger(), "server.get_values invalid request for instance " << instance_id);
+        if (!inst || !inst->server || !inst->model || !items_obj || !items_obj->is_array()) {
+            LOG4CPLUS_ERROR(server_logger(), "server.read invalid request for instance " << instance_id);
             pack_error_response(response, "Invalid request: missing server, model, or references array");
             return true;
         }
 
-        nlohmann::json values = nlohmann::json::object();
-        for (const auto& ref_item : *refs_obj) {
-            std::string reference = ipc::codec::as_string(ref_item, "");
+        nlohmann::json values = nlohmann::json::array();
+        for (const auto& ref_item : *items_obj) {
+            std::string reference = ref_item.value("reference", "");
+            std::string fc = ref_item.value("fc", "");
             ModelNode* node = IedModel_getModelNodeByObjectReference(inst->model, reference.c_str());
-            if (node && ModelNode_getType(node) == DataAttributeModelType) {
-                values[reference] = attribute_value_json(inst->server, reinterpret_cast<DataAttribute*>(node));
+            nlohmann::json value;
+            if (node) {
+                FunctionalConstraint fc_enum = FunctionalConstraint_fromString(fc.c_str());
+                if(fc_enum == IEC61850_FC_NONE) {
+                    LOG4CPLUS_WARN(server_logger(), "Unknown functional constraint '" << fc << "' for reference " << reference);
+                    value = {
+                        {"error", "Unknown functional constraint: " + fc},
+                    };
+                }
+                else{
+                    if(fc_enum == IEC61850_FC_SE){
+                        fc_enum = IEC61850_FC_SG; // SE is an editable version of SG
+                    }
+                    value = {"value", attribute_value_json(inst->server, node, fc_enum)};
+                }
             } else {
-                values[reference] = {
-                    {"value", nullptr},
-                    {"quality", 0},
-                    {"timestamp", nullptr},
+                value = {
+                    {"error", "Reference not found"},
                 };
             }
+            values.push_back({
+                {"reference", reference},
+                {"fc", fc},
+                value,
+            });
         }
 
         response["result"] = {{"values", values}};
@@ -566,7 +655,7 @@ void register_server_actions(ActionRegistry& registry) {
     registry.add(std::make_unique<ServerRemoveAction>());
     registry.add(std::make_unique<ServerLoadModelAction>());
     registry.add(std::make_unique<ServerSetDataValueAction>());
-    registry.add(std::make_unique<ServerGetValuesAction>());
+    registry.add(std::make_unique<ServerReadAction>());
     registry.add(std::make_unique<ServerGetClientsAction>());
     registry.add(std::make_unique<ServerListInstancesAction>());
     registry.add(std::make_unique<ServerGetInterfacesAction>());

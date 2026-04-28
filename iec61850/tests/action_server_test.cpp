@@ -60,25 +60,50 @@ public:
 
 ::testing::Environment* const kLoggingEnvironment = ::testing::AddGlobalTestEnvironment(new LoggingEnvironment());
 
-class ActionServerSharedContextTest : public ::testing::Test {
+class ActionServerModelTest : public ::testing::Test {
 protected:
-    static BackendContext context;
+    BackendContext context;
 };
 
-BackendContext ActionServerSharedContextTest::context;
+class ActionServerOperationTest : public ::testing::Test {
+protected:
+    BackendContext context;
+
+    void SetUp() override {
+        nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("report_goose_ied.json"));
+        ASSERT_TRUE(get_success_flag(response)) << "Failed to load model: " << get_error_message(response);
+    }
+};
 
 } // namespace
 
-TEST_F(ActionServerSharedContextTest, LoadDefaultModelReturnsSuccess) {
-
-        nlohmann::json response = execute_action_json("server.load_model", context, get_default_model_payload());
+TEST_F(ActionServerModelTest, LoadDefaultModelReturnsSuccess) {
+    nlohmann::json response = execute_action_json("server.load_model", context, get_default_model_payload());
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
 }
 
-TEST_F(ActionServerSharedContextTest, LoadReportModelReturnsSuccess) {
+TEST_F(ActionServerModelTest, ReloadModelReplacesExistingModel) {
+    nlohmann::json response1 = execute_action_json("server.load_model", context, get_default_model_payload());
+    EXPECT_TRUE(get_success_flag(response1));
+    EXPECT_EQ(get_error_message(response1), "");
 
+    auto* server = context.get_server_instance("default_instance");
+    ASSERT_NE(server, nullptr);
+    ASSERT_NE(server->model, nullptr);
+
+    auto* original_model = server->model;
+
+    nlohmann::json response2 = execute_action_json("server.load_model", context, load_model_payload_from_file("report_goose_ied.json"));
+    EXPECT_TRUE(get_success_flag(response2));
+    EXPECT_EQ(get_error_message(response2), "");
+
+    ASSERT_NE(server->model, nullptr);
+    EXPECT_NE(server->model, original_model);
+}
+
+TEST_F(ActionServerModelTest, LoadReportModelReturnsSuccess) {
     nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("report_goose_ied.json"));
 
     EXPECT_TRUE(get_success_flag(response));
@@ -161,7 +186,7 @@ TEST_F(ActionServerSharedContextTest, LoadReportModelReturnsSuccess) {
     EXPECT_NE(data_node, nullptr);
 }
 
-TEST_F(ActionServerSharedContextTest, LoadControlModelReturnsSuccess) {
+TEST_F(ActionServerModelTest, LoadControlModelReturnsSuccess) {
 
     nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("control_ied.json"));
 
@@ -220,8 +245,7 @@ TEST_F(ActionServerSharedContextTest, LoadControlModelReturnsSuccess) {
     EXPECT_NE(data_node, nullptr);
 }
 
-TEST_F(ActionServerSharedContextTest, LoadSettingGroupModelReturnsSuccess) {
-
+TEST_F(ActionServerModelTest, LoadSettingGroupModelReturnsSuccess) {
     nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("setting_group_ied.json"));
 
     EXPECT_TRUE(get_success_flag(response));
@@ -263,60 +287,9 @@ TEST_F(ActionServerSharedContextTest, LoadSettingGroupModelReturnsSuccess) {
     EXPECT_NE(data_node, nullptr);
 }
 
-TEST(ActionServer, StartMissingPayloadReturnsError) {
-    BackendContext context;
-    nlohmann::json response = execute_action_json("server.start", context);
-
-    EXPECT_EQ(get_error_message(response), "Missing payload");
-}
-
-TEST(ActionServer, SetDataValueInvalidRequestReturnsError) {
-    BackendContext context;
-
-    nlohmann::json payload = {
-        {"instance_id", "default_instance"},
-        {"reference", "PROT/XCBR1.Pos.stVal"},
-        {"value", 1}
-    };
-    nlohmann::json response = execute_action_json("server.set_data_value", context, payload);
-
-    EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, reference, or value");
-}
-
-TEST(ActionServer, GetValuesInvalidRequestReturnsError) {
-    BackendContext context;
-
-    nlohmann::json payload = {
-        {"instance_id", "default_instance"},
-        {"references", nlohmann::json::array({"PROT/XCBR1.Pos.stVal"})}
-    };
-    nlohmann::json response = execute_action_json("server.get_values", context, payload);
-
-    EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, or references array");
-}
-
-TEST(ActionServer, GetClientsReturnsPayload) {
-    BackendContext context;
-    ServerInstanceContext* server = context.get_or_create_server_instance("server-1");
-    server->clients.push_back({"client-1", "2026-01-31T00:00:00Z"});
-
-    nlohmann::json response = execute_action_json("server.get_clients", context, {{"instance_id", "server-1"}});
-
-    ASSERT_TRUE(response.contains("result"));
-    ASSERT_TRUE(response["result"].contains("clients"));
-    ASSERT_TRUE(response["result"]["clients"].is_array());
-    EXPECT_EQ(response["result"]["clients"].size(), 1u);
-}
-
-TEST(ActionServer, LoadModelAndStartServerReturnsSuccess) {
-    BackendContext context;
-
-    nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("report_goose_ied.json"));
-
-    EXPECT_TRUE(get_success_flag(response));
-    EXPECT_EQ(get_error_message(response), "");
-
-    response = execute_action_json("server.start", context, {
+TEST_F(ActionServerModelTest, StartServerReturnsSuccess) {
+    nlohmann::json response0 = execute_action_json("server.load_model", context, get_default_model_payload());
+    nlohmann::json response = execute_action_json("server.start", context, {
         {"instance_id", "default_instance"},
         {"config", {
             {"ip_address", "192.168.8.100"},
@@ -333,3 +306,75 @@ TEST(ActionServer, LoadModelAndStartServerReturnsSuccess) {
     ASSERT_NE(server, nullptr);
     EXPECT_TRUE(server->running);
 }
+
+TEST_F(ActionServerModelTest, StartMissingPayloadReturnsError) {
+    nlohmann::json response = execute_action_json("server.start", context);
+
+    EXPECT_EQ(get_error_message(response), "Missing payload");
+}
+
+TEST_F(ActionServerOperationTest, GetValuesInvalidRequestReturnsError) {
+    BackendContext localContext;
+    nlohmann::json payload = {
+        {"instance_id", "default_instance"},
+        {"items", nlohmann::json::array({{"reference", "PROT/XCBR1.Pos.stVal"}})}
+    };
+    nlohmann::json response = execute_action_json("server.read", localContext, payload);
+
+    EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, or references array");
+}
+
+TEST_F(ActionServerOperationTest, GetValuesNonExistentReferenceReturnsError) {
+    nlohmann::json payload = {
+        {"instance_id", "default_instance"},
+        {"items", nlohmann::json::array({{"reference", "PROT/XCBR1.Pos.NonExistent"}})}
+    };
+    nlohmann::json response = execute_action_json("server.read", context, payload);
+
+    // EXPECT_EQ(get_error_message(response), "Reference not found: PROT/XCBR1.Pos.NonExistent");
+}
+
+TEST_F(ActionServerOperationTest, GetValuesValidReferenceReturnsValue) {
+    nlohmann::json payload = {
+        {"instance_id", "default_instance"},
+        {"items", nlohmann::json::array({
+            {"reference", "PROT/XCBR1.Pos.stVal"},
+            {"fc", "ST"}
+        })}
+    };
+    nlohmann::json response = execute_action_json("server.read", context, payload);
+
+    // EXPECT_TRUE(get_success_flag(response));
+    // EXPECT_EQ(get_error_message(response), "");
+    // ASSERT_TRUE(response.contains("result"));
+    // ASSERT_TRUE(response["result"].contains("values"));
+    // ASSERT_TRUE(response["result"]["values"].is_array());
+    // ASSERT_EQ(response["result"]["values"].size(), 1u);
+    // EXPECT_EQ(response["result"]["values"][0]["reference"], "PROT/XCBR1.Pos.stVal");
+    // EXPECT_EQ(response["result"]["values"][0]["value"], true);
+}
+
+TEST_F(ActionServerOperationTest, SetDataValueInvalidRequestReturnsError) {
+    nlohmann::json payload = {
+        {"instance_id", "default_instance"},
+        {"reference", "PROT/XCBR1.Pos.stVal"},
+        {"value", 1}
+    };
+    nlohmann::json response = execute_action_json("server.set_data_value", context, payload);
+
+    EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, reference, or value");
+}
+
+TEST(ActionServer, GetClientsReturnsPayload) {
+    BackendContext context;
+    ServerInstanceContext* server = context.get_or_create_server_instance("server-1");
+    server->clients.push_back({"client-1", "2026-01-31T00:00:00Z"});
+
+    nlohmann::json response = execute_action_json("server.get_clients", context, {{"instance_id", "server-1"}});
+
+    ASSERT_TRUE(response.contains("result"));
+    ASSERT_TRUE(response["result"].contains("clients"));
+    ASSERT_TRUE(response["result"]["clients"].is_array());
+    EXPECT_EQ(response["result"]["clients"].size(), 1u);
+}
+

@@ -9,24 +9,24 @@
 namespace ipc::actions {
 
 enum class ActionMethod {
-	ServerStart,
-	ServerStop,
-	ServerRemove,
-	ServerLoadModel,
-	ServerSetDataValue,
-	ServerGetValues,
-	ServerGetClients,
-	ServerListInstances,
-	ServerGetInterfaces,
-	ServerSetInterface,
+	ServerStart,		// 启动服务
+	ServerStop,			// 停止服务
+	ServerRemove,		// 移除服务实例
+	ServerLoadModel,	// 加载模型
+	ServerSetDataValue,	// 设置数据值
+	ServerRead,			// 读取数据值
+	ServerGetClients,	// 获取客户端列表
+	ServerListInstances,	// 列出实例
+	ServerGetInterfaces,	// 获取接口
+	ServerSetInterface,	// 设置接口
 
-	ClientConnect,
-	ClientDisconnect,
-	ClientBrowse,
-	ClientRead,
-	ClientReadBatch,
-	ClientWrite,
-	ClientListInstances,
+	ClientConnect,		// 连接客户端
+	ClientDisconnect,	// 断开客户端
+	ClientBrowse,		// 浏览客户端
+	ClientRead,			// 读取客户端数据
+	ClientReadBatch,	// 批量读取客户端数据
+	ClientWrite,		// 写入客户端数据
+	ClientListInstances,	// 列出客户端实例
 };
 
 struct ActionContext {

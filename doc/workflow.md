@@ -52,6 +52,20 @@ sequenceDiagram;
 - 启动服务后验证服务启动完成
   * `ActionServer.LoadModelAndStartServerReturnsSuccess`
 
+### 读取数据
+```mermaid
+sequenceDiagram;
+    autonumber
+    participant UI
+    participant Server
+    participant Action
+    UI->>Server: 请求数据
+    Note right of UI: server.get_data
+    Server->>+Action: 读取数据
+    Action->>-Server: 返回数据
+    Server->>UI: 返回数据
+```
+
 ## 数据变更联动
 
 # 客户端
