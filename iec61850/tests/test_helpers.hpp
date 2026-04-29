@@ -7,5 +7,4 @@
 
 nlohmann::json execute_action_json(const std::string& action, BackendContext& context, const nlohmann::json& payload = nlohmann::json{});
 
-nlohmann::json get_default_model_payload();
 nlohmann::json load_model_payload_from_file(const std::string& model_path);

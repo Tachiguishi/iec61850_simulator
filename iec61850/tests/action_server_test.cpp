@@ -78,14 +78,14 @@ protected:
 } // namespace
 
 TEST_F(ActionServerModelTest, LoadDefaultModelReturnsSuccess) {
-    nlohmann::json response = execute_action_json("server.load_model", context, get_default_model_payload());
+    nlohmann::json response = execute_action_json("server.load_model", context, load_model_payload_from_file("default_ied.json"));
 
     EXPECT_TRUE(get_success_flag(response));
     EXPECT_EQ(get_error_message(response), "");
 }
 
 TEST_F(ActionServerModelTest, ReloadModelReplacesExistingModel) {
-    nlohmann::json response1 = execute_action_json("server.load_model", context, get_default_model_payload());
+    nlohmann::json response1 = execute_action_json("server.load_model", context, load_model_payload_from_file("default_ied.json"));
     EXPECT_TRUE(get_success_flag(response1));
     EXPECT_EQ(get_error_message(response1), "");
 
@@ -288,7 +288,7 @@ TEST_F(ActionServerModelTest, LoadSettingGroupModelReturnsSuccess) {
 }
 
 TEST_F(ActionServerModelTest, StartServerReturnsSuccess) {
-    nlohmann::json response0 = execute_action_json("server.load_model", context, get_default_model_payload());
+    nlohmann::json response0 = execute_action_json("server.load_model", context, load_model_payload_from_file("default_ied.json"));
     nlohmann::json response = execute_action_json("server.start", context, {
         {"instance_id", "default_instance"},
         {"config", {

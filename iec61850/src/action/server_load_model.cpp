@@ -9,6 +9,7 @@
 #include <cctype>
 #include <climits>
 #include <cstdlib>
+#include <functional>
 #include <unordered_map>
 
 namespace ipc::actions {
@@ -171,6 +172,49 @@ uint32_t parse_uint32_auto_base(const nlohmann::json& obj) {
     return 0;
 }
 
+bool is_named_collection(const nlohmann::json* obj) {
+    return obj && (obj->is_object() || obj->is_array());
+}
+
+std::string extract_name_or_fallback(const nlohmann::json& item, const std::string& fallback = "") {
+    if (auto name_obj = ipc::codec::find_key(item, "name")) {
+        std::string name = ipc::codec::as_string(*name_obj, fallback);
+        if (!name.empty()) {
+            return name;
+        }
+    }
+    return fallback;
+}
+
+void for_each_named_item(const nlohmann::json* collection,
+                         const std::function<void(const std::string&, const nlohmann::json&)>& callback) {
+    if (!collection) {
+        return;
+    }
+
+    if (collection->is_object()) {
+        for (auto it = collection->begin(); it != collection->end(); ++it) {
+            callback(it.key(), it.value());
+        }
+        return;
+    }
+
+    if (!collection->is_array()) {
+        return;
+    }
+
+    for (const auto& item : *collection) {
+        if (!item.is_object()) {
+            continue;
+        }
+        const std::string name = extract_name_or_fallback(item);
+        if (name.empty()) {
+            continue;
+        }
+        callback(name, item);
+    }
+}
+
 MmsValue* create_value_from_msg(const nlohmann::json& obj, DataAttributeType type) {
     if (obj.is_null()) {
         return nullptr;
@@ -237,16 +281,16 @@ void create_attribute_recursive(const std::string& name, ModelNode* parent, cons
     }
 
     auto attributes_obj = ipc::codec::find_key(attr_obj, "attributes");
-    bool has_children = attributes_obj && attributes_obj->is_object();
+    bool has_children = is_named_collection(attributes_obj);
 
     DataAttributeType attr_type = has_children ? IEC61850_CONSTRUCTED : map_type(type_str);
     FunctionalConstraint fc = map_fc(fc_str);
     DataAttribute* da = DataAttribute_create(name.c_str(), parent, attr_type, fc, 0, 0, 0);
 
     if (has_children) {
-        for (auto it = attributes_obj->begin(); it != attributes_obj->end(); ++it) {
-            create_attribute_recursive(it.key(), reinterpret_cast<ModelNode*>(da), it.value());
-        }
+        for_each_named_item(attributes_obj, [da](const std::string& child_name, const nlohmann::json& child_attr) {
+            create_attribute_recursive(child_name, reinterpret_cast<ModelNode*>(da), child_attr);
+        });
         return;
     }
 
@@ -262,20 +306,20 @@ void create_data_object_recursive(const std::string& name, ModelNode* parent, co
     DataObject* dobj = DataObject_create(name.c_str(), parent, 0);
 
     auto attrs_obj = ipc::codec::find_key(do_obj, "attributes");
-    if (!attrs_obj || !attrs_obj->is_object()) {
+    if (!is_named_collection(attrs_obj)) {
         return;
     }
 
-    for (auto it = attrs_obj->begin(); it != attrs_obj->end(); ++it) {
-        if (ipc::codec::find_key(it.value(), "cdc")) {
-            create_data_object_recursive(it.key(), reinterpret_cast<ModelNode*>(dobj), it.value());
+    for_each_named_item(attrs_obj, [dobj](const std::string& attr_name, const nlohmann::json& attr_value) {
+        if (ipc::codec::find_key(attr_value, "cdc")) {
+            create_data_object_recursive(attr_name, reinterpret_cast<ModelNode*>(dobj), attr_value);
         } else {
-            create_attribute_recursive(it.key(), reinterpret_cast<ModelNode*>(dobj), it.value());
+            create_attribute_recursive(attr_name, reinterpret_cast<ModelNode*>(dobj), attr_value);
         }
-    }
+    });
 }
 
-IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& out_ied_name) {
+IedModel* build_model_from_json(const nlohmann::json& model_obj, std::string& out_ied_name) {
     std::string ied_name = "IED";
     if (auto name_obj = ipc::codec::find_key(model_obj, "name")) {
         ied_name = ipc::codec::as_string(*name_obj, "IED");
@@ -290,45 +334,46 @@ IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& ou
     std::unordered_map<std::string, Log*> log_instances;
 
     auto lds_obj = ipc::codec::find_key(model_obj, "logical_devices");
-    if (!lds_obj || !lds_obj->is_object()) {
+    if (!is_named_collection(lds_obj)) {
         return model;
     }
 
-    for (auto ld_it = lds_obj->begin(); ld_it != lds_obj->end(); ++ld_it) {
-        const std::string ld_name = ld_it.key();
-        const auto& ld_obj = ld_it.value();
+    for_each_named_item(lds_obj, [&](const std::string& ld_name, const nlohmann::json& ld_obj) {
+        if (!ld_obj.is_object() || ld_name.empty()) {
+            return;
+        }
+
         LogicalDevice* ld = LogicalDevice_create(ld_name.c_str(), model);
 
         auto ln_obj = ipc::codec::find_key(ld_obj, "logical_nodes");
-        if (!ln_obj || !ln_obj->is_object()) {
-            continue;
+        if (!is_named_collection(ln_obj)) {
+            return;
         }
 
-        for (auto ln_it = ln_obj->begin(); ln_it != ln_obj->end(); ++ln_it) {
-            const std::string ln_name = ln_it.key();
-            const auto& ln_value = ln_it.value();
+        for_each_named_item(ln_obj, [&](const std::string& ln_name, const nlohmann::json& ln_value) {
+            if (!ln_value.is_object() || ln_name.empty()) {
+                return;
+            }
+
             LogicalNode* ln = LogicalNode_create(ln_name.c_str(), ld);
 
             auto do_obj = ipc::codec::find_key(ln_value, "data_objects");
-            if (do_obj && do_obj->is_object()) {
-                for (auto do_it = do_obj->begin(); do_it != do_obj->end(); ++do_it) {
-                    create_data_object_recursive(do_it.key(), reinterpret_cast<ModelNode*>(ln), do_it.value());
-                }
+            if (is_named_collection(do_obj)) {
+                for_each_named_item(do_obj, [ln](const std::string& do_name, const nlohmann::json& do_value) {
+                    create_data_object_recursive(do_name, reinterpret_cast<ModelNode*>(ln), do_value);
+                });
             }
 
             auto data_sets_obj = ipc::codec::find_key(ln_value, "data_sets");
-            if (data_sets_obj && data_sets_obj->is_object()) {
-                for (auto ds_it = data_sets_obj->begin(); ds_it != data_sets_obj->end(); ++ds_it) {
-                    std::string ds_name = ds_it.key();
-                    if (auto name_obj = ipc::codec::find_key(ds_it.value(), "name")) {
-                        std::string name_override = ipc::codec::as_string(*name_obj, ds_name);
-                        if (!name_override.empty()) {
-                            ds_name = name_override;
-                        }
+            if (is_named_collection(data_sets_obj)) {
+                for_each_named_item(data_sets_obj, [ln](const std::string& raw_ds_name, const nlohmann::json& ds_value) {
+                    std::string ds_name = extract_name_or_fallback(ds_value, raw_ds_name);
+                    if (ds_name.empty()) {
+                        return;
                     }
 
                     DataSet* data_set = DataSet_create(ds_name.c_str(), ln);
-                    auto fcdas_obj = ipc::codec::find_key(ds_it.value(), "fcdas");
+                    auto fcdas_obj = ipc::codec::find_key(ds_value, "fcdas");
                     if (fcdas_obj && fcdas_obj->is_array()) {
                         for (const auto& fcda : *fcdas_obj) {
                             std::string ref = ipc::codec::as_string(fcda, "");
@@ -337,19 +382,15 @@ IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& ou
                             }
                         }
                     }
-                }
+                });
             }
 
             auto report_controls_obj = ipc::codec::find_key(ln_value, "report_controls");
-            if (report_controls_obj && report_controls_obj->is_object()) {
-                for (auto rc_it = report_controls_obj->begin(); rc_it != report_controls_obj->end(); ++rc_it) {
-                    std::string rc_name = rc_it.key();
-                    const auto& rc_val = rc_it.value();
-                    if (auto name_obj = ipc::codec::find_key(rc_val, "name")) {
-                        std::string name_override = ipc::codec::as_string(*name_obj, rc_name);
-                        if (!name_override.empty()) {
-                            rc_name = name_override;
-                        }
+            if (is_named_collection(report_controls_obj)) {
+                for_each_named_item(report_controls_obj, [ln](const std::string& raw_rc_name, const nlohmann::json& rc_val) {
+                    std::string rc_name = extract_name_or_fallback(rc_val, raw_rc_name);
+                    if (rc_name.empty()) {
+                        return;
                     }
 
                     bool buffered = false;
@@ -406,19 +447,15 @@ IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& ou
                     const char* dataset_ptr = dataset.empty() ? nullptr : dataset.c_str();
                     ReportControlBlock_create(rc_name.c_str(), ln, rpt_id_ptr, buffered, dataset_ptr,
                                               conf_rev, trg_ops, opt_flds, buf_tm, intg_pd);
-                }
+                });
             }
 
             auto gse_controls_obj = ipc::codec::find_key(ln_value, "gse_controls");
-            if (gse_controls_obj && gse_controls_obj->is_object()) {
-                for (auto gse_it = gse_controls_obj->begin(); gse_it != gse_controls_obj->end(); ++gse_it) {
-                    std::string gse_name = gse_it.key();
-                    const auto& gse_val = gse_it.value();
-                    if (auto name_obj = ipc::codec::find_key(gse_val, "name")) {
-                        std::string name_override = ipc::codec::as_string(*name_obj, gse_name);
-                        if (!name_override.empty()) {
-                            gse_name = name_override;
-                        }
+            if (is_named_collection(gse_controls_obj)) {
+                for_each_named_item(gse_controls_obj, [&](const std::string& raw_gse_name, const nlohmann::json& gse_val) {
+                    std::string gse_name = extract_name_or_fallback(gse_val, raw_gse_name);
+                    if (gse_name.empty()) {
+                        return;
                     }
 
                     std::string dataset;
@@ -465,19 +502,15 @@ IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& ou
                     GSEControlBlock* gse = GSEControlBlock_create(gse_name.c_str(), ln, app_id_ptr, dataset_ptr,
                                                                   conf_rev, fixed_offs, min_time, max_time);
                     gse_controls[ld_name + "/" + gse_name] = gse;
-                }
+                });
             }
 
             auto smv_controls_obj = ipc::codec::find_key(ln_value, "smv_controls");
-            if (smv_controls_obj && smv_controls_obj->is_object()) {
-                for (auto smv_it = smv_controls_obj->begin(); smv_it != smv_controls_obj->end(); ++smv_it) {
-                    std::string smv_name = smv_it.key();
-                    const auto& smv_val = smv_it.value();
-                    if (auto name_obj = ipc::codec::find_key(smv_val, "name")) {
-                        std::string name_override = ipc::codec::as_string(*name_obj, smv_name);
-                        if (!name_override.empty()) {
-                            smv_name = name_override;
-                        }
+            if (is_named_collection(smv_controls_obj)) {
+                for_each_named_item(smv_controls_obj, [&](const std::string& raw_smv_name, const nlohmann::json& smv_val) {
+                    std::string smv_name = extract_name_or_fallback(smv_val, raw_smv_name);
+                    if (smv_name.empty()) {
+                        return;
                     }
 
                     std::string dataset;
@@ -537,19 +570,15 @@ IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& ou
                     SVControlBlock* smv = SVControlBlock_create(smv_name.c_str(), ln, sv_id_ptr, dataset_ptr,
                                                                 conf_rev, smp_mod, smp_rate, opt_flds, is_unicast);
                     smv_controls[ld_name + "/" + smv_name] = smv;
-                }
+                });
             }
 
             auto log_controls_obj = ipc::codec::find_key(ln_value, "log_controls");
-            if (log_controls_obj && log_controls_obj->is_object()) {
-                for (auto log_it = log_controls_obj->begin(); log_it != log_controls_obj->end(); ++log_it) {
-                    std::string log_name = log_it.key();
-                    const auto& log_val = log_it.value();
-                    if (auto name_obj = ipc::codec::find_key(log_val, "name")) {
-                        std::string name_override = ipc::codec::as_string(*name_obj, log_name);
-                        if (!name_override.empty()) {
-                            log_name = name_override;
-                        }
+            if (is_named_collection(log_controls_obj)) {
+                for_each_named_item(log_controls_obj, [&](const std::string& raw_log_name, const nlohmann::json& log_val) {
+                    std::string log_name = extract_name_or_fallback(log_val, raw_log_name);
+                    if (log_name.empty()) {
+                        return;
                     }
 
                     std::string dataset;
@@ -593,7 +622,7 @@ IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& ou
                     if (!log_ref.empty() && !log_instances.count(log_ref)) {
                         log_instances[log_ref] = Log_create(log_ref.c_str(), ln);
                     }
-                }
+                });
             }
 
             auto sg_obj = ipc::codec::find_key(ln_value, "setting_group_control");
@@ -608,8 +637,8 @@ IedModel* build_model_from_dict(const nlohmann::json& model_obj, std::string& ou
                 }
                 SettingGroupControlBlock_create(ln, act_sg, num_sgs);
             }
-        }
-    }
+        });
+    });
 
     auto comm_obj = ipc::codec::find_key(model_obj, "communication");
     if (comm_obj && comm_obj->is_object()) {
@@ -750,7 +779,7 @@ bool ServerLoadModelAction::handle(ActionContext& ctx, nlohmann::json& response)
         inst->model = nullptr;
     }
 
-    inst->model = build_model_from_dict(*model_obj, inst->ied_name);
+    inst->model = build_model_from_json(*model_obj, inst->ied_name);
 
     inst->config = IedServerConfig_create();
 
