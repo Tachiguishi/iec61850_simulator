@@ -45,6 +45,7 @@ ActionServer.
   * `ActionServerModelTest.ReloadModelReplacesExistingModel`
 
 ### 启动服务 server.start
+前置条件: 模型已加载
 ```mermaid
 sequenceDiagram;
     autonumber
@@ -72,6 +73,13 @@ sequenceDiagram;
     Action->>-Server: 返回数据
     Server->>UI: 返回数据
 ```
+测试用例:
+- 未加载模型时请求数据，验证返回错误
+  * `ActionServerOperationTest.GetValuesInvalidRequestReturnsError`
+- 请求的Reference不存在，验证返回错误
+  * `ActionServerOperationTest.GetValuesNonExistentReferenceReturnsError`
+- 请求数据，验证返回正确数据
+  * `ActionServerOperationTest.GetValuesValidReferenceReturnsValue`
 
 ## 数据变更联动
 

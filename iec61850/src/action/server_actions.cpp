@@ -161,7 +161,7 @@ nlohmann::json attribute_value_json(IedServer server, ModelNode* dataModel, Func
         }
             break;
         default:
-            return nullptr;
+            return result;
     }
 
     return result;
@@ -294,7 +294,6 @@ public:
             {"success", inst->running},
             {"instance_id", instance_id},
         };
-        response["error"] = nullptr;
         return true;
     }
 };
@@ -326,7 +325,6 @@ public:
         }
 
         response["result"] = ipc::codec::make_success_payload();
-        response["error"] = nullptr;
         return true;
     }
 };
@@ -380,7 +378,6 @@ public:
         }
 
         response["result"] = ipc::codec::make_success_payload();
-        response["error"] = nullptr;
         return true;
     }
 };
@@ -423,7 +420,6 @@ public:
         }
 
         response["result"] = ipc::codec::make_success_payload();
-        response["error"] = nullptr;
         return true;
     }
 };
@@ -472,22 +468,30 @@ public:
                     if(fc_enum == IEC61850_FC_SE){
                         fc_enum = IEC61850_FC_SG; // SE is an editable version of SG
                     }
-                    value = {"value", attribute_value_json(inst->server, node, fc_enum)};
+                    nlohmann::json result = attribute_value_json(inst->server, node, fc_enum);
+                    if(result.is_null()) {
+                        LOG4CPLUS_WARN(server_logger(), "Failed to read value for reference " << reference << " with functional constraint " << fc);
+                        value = {
+                            {"error", "Failed to read value for reference with functional constraint: " + fc},
+                        };
+                    } else {
+                        value = {
+                            {"value", result}
+                        };
+                    }
                 }
             } else {
                 value = {
                     {"error", "Reference not found"},
                 };
             }
-            values.push_back({
-                {"reference", reference},
-                {"fc", fc},
-                value,
-            });
+
+            value["reference"] = reference;
+            value["fc"] = fc;
+            values.push_back(value);
         }
 
-        response["result"] = {{"values", values}};
-        response["error"] = nullptr;
+        response["result"] = values;
         return true;
     }
 };
@@ -523,7 +527,6 @@ public:
         }
 
         response["result"] = {{"clients", clients}};
-        response["error"] = nullptr;
         return true;
     }
 };
@@ -553,7 +556,6 @@ public:
         }
 
         response["result"] = {{"instances", instances}};
-        response["error"] = nullptr;
         return true;
     }
 };
@@ -594,7 +596,6 @@ public:
             {"interfaces", iface_array},
             {"current_interface", current_interface},
         };
-        response["error"] = nullptr;
         return true;
     }
 };
@@ -636,7 +637,6 @@ public:
             {"interface_name", interface_name},
             {"prefix_len", prefix_len},
         };
-        response["error"] = nullptr;
         return true;
     }
 };

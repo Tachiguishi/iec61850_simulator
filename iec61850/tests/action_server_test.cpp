@@ -328,15 +328,30 @@ TEST_F(ActionServerOperationTest, GetValuesNonExistentReferenceReturnsError) {
     nlohmann::json payload = {
         {"instance_id", "default_instance"},
         {"items", nlohmann::json::array({
-                {{"reference", "PROT/XCBR1.Pos.NonExistent"}}
+                {
+                    {"reference", "simpleIOGenericIO/GGIO1.NonExistent"}
+                },
+                {
+                    {"reference", "simpleIOGenericIO/GGIO1.AnIn1"},
+                    {"fc", "ST"}
+                }
             })
         }
     };
 
-    std::cout << "Testing with payload: " << payload.dump(2) << std::endl;
     nlohmann::json response = execute_action_json("server.read", context, payload);
 
-    // EXPECT_EQ(get_error_message(response), "Reference not found: PROT/XCBR1.Pos.NonExistent");
+    EXPECT_EQ(get_error_message(response), "");
+    ASSERT_TRUE(response.contains("result")) << "Response does not contain 'result': " << response.dump(2);
+    ASSERT_TRUE(response["result"].is_array()) << "'result' is not an array: " << response.dump(2);
+    ASSERT_EQ(response["result"].size(), 2u) << "Expected 2 items in 'result', got " << response["result"].size() << ": " << response.dump(2);
+    EXPECT_EQ(response["result"][0]["reference"], "simpleIOGenericIO/GGIO1.NonExistent") << "Reference in response does not match request: " << response.dump(2);
+    EXPECT_EQ(response["result"][0]["error"], "Reference not found") << "Expected error message for non-existent reference: " << response.dump(2);
+
+    EXPECT_EQ(response["result"][1]["reference"], "simpleIOGenericIO/GGIO1.AnIn1") << "Reference in response does not match request: " << response.dump(2);
+    EXPECT_EQ(response["result"][1]["fc"], "ST") << "Functional constraint in response does not match request: " << response.dump(2);
+    EXPECT_EQ(response["result"][1]["error"], "Failed to read value for reference with functional constraint: ST") << "Expected error message for valid reference with unsupported functional constraint: " << response.dump(2);
+    EXPECT_FALSE(response["result"][1].contains("value")) << "Did not expect value for valid reference with missing value: " << response.dump(2);
 }
 
 TEST_F(ActionServerOperationTest, GetValuesValidReferenceReturnsValue) {
@@ -344,7 +359,15 @@ TEST_F(ActionServerOperationTest, GetValuesValidReferenceReturnsValue) {
         {"instance_id", "default_instance"},
         {"items", nlohmann::json::array({
             {
-                {"reference", "PROT/XCBR1.Pos.stVal"},
+                {"reference", "simpleIOGenericIO/GGIO1.AnIn1"},
+                {"fc", "MX"}
+            },
+            {
+                {"reference", "simpleIOGenericIO/GGIO1.SPCSO1"},
+                {"fc", "ST"}
+            },
+            {
+                {"reference", "simpleIOGenericIO/GGIO1.SPCSO1.q"},
                 {"fc", "ST"}
             }
         })}
@@ -353,14 +376,24 @@ TEST_F(ActionServerOperationTest, GetValuesValidReferenceReturnsValue) {
 
     std::cout << "Response: " << response.dump(2) << std::endl;
 
-    // EXPECT_TRUE(get_success_flag(response));
-    // EXPECT_EQ(get_error_message(response), "");
-    // ASSERT_TRUE(response.contains("result"));
-    // ASSERT_TRUE(response["result"].contains("values"));
-    // ASSERT_TRUE(response["result"]["values"].is_array());
-    // ASSERT_EQ(response["result"]["values"].size(), 1u);
-    // EXPECT_EQ(response["result"]["values"][0]["reference"], "PROT/XCBR1.Pos.stVal");
-    // EXPECT_EQ(response["result"]["values"][0]["value"], true);
+    EXPECT_EQ(get_error_message(response), "");
+    ASSERT_TRUE(response.contains("result")) << "Response does not contain 'result': " << response.dump(2);
+    ASSERT_TRUE(response["result"].is_array()) << "'result' is not an array: " << response.dump(2);
+    ASSERT_EQ(response["result"].size(), 3u) << "Expected 3 items in 'result', got " << response["result"].size() << ": " << response.dump(2);
+    ASSERT_EQ(response["result"][0]["reference"], "simpleIOGenericIO/GGIO1.AnIn1") << "Reference in response does not match request: " << response.dump(2);
+    ASSERT_EQ(response["result"][0]["fc"], "MX") << "Functional constraint in response does not match request: " << response.dump(2);
+    ASSERT_FALSE(response["result"][0].contains("error")) << "Did not expect error for valid reference: " << response.dump(2);
+    ASSERT_TRUE(response["result"][0].contains("value")) << "Response item does not contain 'value': " << response.dump(2); 
+
+    ASSERT_EQ(response["result"][1]["reference"], "simpleIOGenericIO/GGIO1.SPCSO1") << "Reference in response does not match request: " << response.dump(2);
+    ASSERT_EQ(response["result"][1]["fc"], "ST") << "Functional constraint in response does not match request: " << response.dump(2);
+    ASSERT_FALSE(response["result"][1].contains("error")) << "Did not expect error for valid reference: " << response.dump(2);
+    ASSERT_TRUE(response["result"][1].contains("value")) << "Response item does not contain 'value': " << response.dump(2);
+
+    ASSERT_EQ(response["result"][2]["reference"], "simpleIOGenericIO/GGIO1.SPCSO1.q") << "Reference in response does not match request: " << response.dump(2);
+    ASSERT_EQ(response["result"][2]["fc"], "ST") << "Functional constraint in response does not match request: " << response.dump(2);
+    ASSERT_FALSE(response["result"][2].contains("error")) << "Did not expect error for valid reference: " << response.dump(2);
+    ASSERT_TRUE(response["result"][2].contains("value")) << "Response item does not contain 'value': " << response.dump(2);
 }
 
 TEST_F(ActionServerOperationTest, SetDataValueInvalidRequestReturnsError) {
