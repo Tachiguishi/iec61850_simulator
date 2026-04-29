@@ -240,27 +240,16 @@ public:
         LOG4CPLUS_INFO(server_logger(), "server.start requested for instance " << instance_id);
 
         auto* inst = ctx.context.get_server_instance(instance_id);
-        if (!inst || !inst->model) {
+        if (!inst || !inst->model || !inst->server) {
             LOG4CPLUS_ERROR(server_logger(), "server.start: server not initialized for instance " << instance_id);
             pack_error_response(response, "Server not initialized. Call server.load_model first");
             return true;
         }
 
-        if (!inst->config) {
-            inst->config = IedServerConfig_create();
-        }
-
-        if (!inst->server) {
-            inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
-            IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
-            if (inst->ip_address != "0.0.0.0") {
-                IedServer_setLocalIpAddress(inst->server, inst->ip_address.c_str());
-            }
-        }
-
         if (inst->running) {
-            IedServer_stop(inst->server);
-            inst->running = false;
+            LOG4CPLUS_ERROR(server_logger(), "server.start: server already running for instance " << instance_id);
+            pack_error_response(response, "Server is already running");
+            return true;
         }
 
         int port = inst->port;
@@ -274,11 +263,12 @@ public:
             }
             if (auto ip_obj = ipc::codec::find_key(*config_obj, "ip_address")) {
                 ip_address = ipc::codec::as_string(*ip_obj, inst->ip_address);
-                if (ip_address != "0.0.0.0") {
-                    IedServer_setLocalIpAddress(inst->server, ip_address.c_str());
-                    inst->ip_address = ip_address;
-                }
+                inst->ip_address = ip_address;
             }
+        }
+
+        if (inst->ip_address != "0.0.0.0") {
+            IedServer_setLocalIpAddress(inst->server, inst->ip_address.c_str());
         }
 
         if (network::should_configure_ip(ip_address) && !ctx.context.global_interface_name.empty()) {
@@ -291,6 +281,8 @@ public:
         } else {
             LOG4CPLUS_INFO(server_logger(), "Using IP " << ip_address << " without additional configuration");
         }
+
+        IedServer_setConnectionIndicationHandler(inst->server, on_connection_event, inst);
 
         LOG4CPLUS_INFO(server_logger(), "Starting server instance " << instance_id << " on " << ip_address << ":" << port);
         IedServer_start(inst->server, port);
@@ -653,6 +645,7 @@ void register_server_actions(ActionRegistry& registry) {
     registry.add(std::make_unique<ServerStartAction>());
     registry.add(std::make_unique<ServerStopAction>());
     registry.add(std::make_unique<ServerRemoveAction>());
+    registry.add(std::make_unique<ServerConfigAction>());
     registry.add(std::make_unique<ServerLoadModelAction>());
     registry.add(std::make_unique<ServerSetDataValueAction>());
     registry.add(std::make_unique<ServerReadAction>());

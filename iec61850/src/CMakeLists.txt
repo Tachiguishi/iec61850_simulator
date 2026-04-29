@@ -19,7 +19,8 @@ elseif(TARGET log4cplus)
 	target_link_libraries(iec61850_core PRIVATE log4cplus)
 endif()
 
-string(TIMESTAMP CURRENT_TIMESTAMP "%Y-%m-%d %H:%M:%S")
+# string(TIMESTAMP CURRENT_TIMESTAMP "%Y-%m-%d %H:%M:%S")
+string(TIMESTAMP CURRENT_TIMESTAMP "%Y-%m-%d")
 execute_process(
 	COMMAND git describe --tags --always --dirty
 	OUTPUT_VARIABLE GIT_VERSION

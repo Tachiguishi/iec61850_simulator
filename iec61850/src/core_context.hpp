@@ -22,14 +22,14 @@ struct ServerInstanceContext {
     std::string instance_id;
     std::string ied_name;
     std::string ip_address = "0.0.0.0";  // 监听的 IP 地址
+    int port = 102;
     bool ip_configured = false;          // 是否配置了IP地址
-    
+
     IedModel* model = nullptr;
     IedServer server = nullptr;
     IedServerConfig config = nullptr;
     std::vector<ClientInfo> clients;
-    
-    int port = 102;
+
     bool running = false;
     
     ~ServerInstanceContext();

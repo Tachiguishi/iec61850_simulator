@@ -110,7 +110,7 @@ nlohmann::json execute_action_json(const std::string& action,
   return unpack_msgpack_bytes_to_json(response_bytes);
 }
 
-nlohmann::json load_model_payload_from_file(const std::string& model_path) {
+nlohmann::json load_model_payload_from_file(const std::string& model_path, bool modelOnly) {
   char buffer[PATH_MAX] = {0};
   ssize_t len = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
   std::filesystem::path json_path = model_path;
@@ -128,6 +128,9 @@ nlohmann::json load_model_payload_from_file(const std::string& model_path) {
   nlohmann::json result;
   result["instance_id"] = "default_instance";
   result["model"] = payload;
+   if(modelOnly){
+    result["modelOnly"] = true;
+  }
   return result;
 }
 

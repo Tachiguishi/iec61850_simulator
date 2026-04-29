@@ -13,6 +13,7 @@ void ActionRegistry::add(std::unique_ptr<ActionHandler> handler) {
         case ActionMethod::ServerStop: action_name = "server.stop"; break;
         case ActionMethod::ServerRemove: action_name = "server.remove"; break;
         case ActionMethod::ServerLoadModel: action_name = "server.load_model"; break;
+        case ActionMethod::ServerConfig: action_name = "server.config"; break;
         case ActionMethod::ServerSetDataValue: action_name = "server.set_data_value"; break;
         case ActionMethod::ServerRead: action_name = "server.read"; break;
         case ActionMethod::ServerGetClients: action_name = "server.get_clients"; break;

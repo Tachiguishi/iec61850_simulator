@@ -770,9 +770,8 @@ bool ServerLoadModelAction::handle(ActionContext& ctx, nlohmann::json& response)
         IedServer_destroy(inst->server);
         inst->server = nullptr;
     }
-    if (inst->config) {
-        IedServerConfig_destroy(inst->config);
-        inst->config = nullptr;
+    if (!inst->config) {
+        inst->config = IedServerConfig_create();
     }
     if (inst->model) {
         IedModel_destroy(inst->model);
@@ -780,34 +779,19 @@ bool ServerLoadModelAction::handle(ActionContext& ctx, nlohmann::json& response)
     }
 
     inst->model = build_model_from_json(*model_obj, inst->ied_name);
+    if(!inst->model) {
+        LOG4CPLUS_ERROR(server_logger(), "Failed to build model for instance " << instance_id);
+        pack_error_response(response, "failed to build model from provided JSON");
+        return true;
+    }
 
-    inst->config = IedServerConfig_create();
-
-    int max_conn = 10;
-    int port = 102;
-    std::string ip_address = "0.0.0.0";
-
-    if (config_obj && config_obj->is_object()) {
-        if (auto max_conn_obj = ipc::codec::find_key(*config_obj, "max_connections")) {
-            max_conn = static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10));
-            LOG4CPLUS_DEBUG(server_logger(), "max_connections set to " << max_conn);
-        }
-        if (auto port_obj = ipc::codec::find_key(*config_obj, "port")) {
-            port = static_cast<int>(ipc::codec::as_int64(*port_obj, 102));
-            LOG4CPLUS_DEBUG(server_logger(), "port set to " << port);
-        }
-        if (auto ip_obj = ipc::codec::find_key(*config_obj, "ip_address")) {
-            ip_address = ipc::codec::as_string(*ip_obj, "0.0.0.0");
-            LOG4CPLUS_DEBUG(server_logger(), "ip_address set to " << ip_address);
+    if(!ipc::codec::find_key(ctx.payload, "modelOnly")) {
+        if(!init_iedServer(inst, instance_id, response)) {
+            return true;
         }
     }
 
-    IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
-
-    inst->port = port;
-    inst->ip_address = ip_address;
-
-    LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " loaded model (" << inst->ied_name << "), ready to start on " << ip_address << ":" << port);
+    LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " loaded model (" << inst->ied_name << ")");
 
     response["result"] = {
         {"success", true},
@@ -817,4 +801,68 @@ bool ServerLoadModelAction::handle(ActionContext& ctx, nlohmann::json& response)
     return true;
 }
 
-} // namespace ipc::actions
+bool ServerConfigAction::handle(ActionContext& ctx, nlohmann::json& response) {
+    if (!check_payload_existence(ctx, response)) {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(ctx.context.mutex);
+
+    bool error_occurred = false;
+    std::string instance_id = validate_and_extract_instance_id(ctx.payload, ctx.action, response, error_occurred);
+    if (error_occurred) {
+        return true;
+    }
+
+    LOG4CPLUS_INFO(server_logger(), "server.config requested for instance " << instance_id);
+
+    auto config_obj = ipc::codec::find_key(ctx.payload, "config");
+    if (!config_obj || !config_obj->is_object()) {
+        LOG4CPLUS_ERROR(server_logger(), "server.config: config object is required for instance " << instance_id);
+        pack_error_response(response, "config object is required in payload");
+        return true;
+    }
+
+    auto* inst = ctx.context.get_or_create_server_instance(instance_id);
+    if (!inst->config) {
+        inst->config = IedServerConfig_create();
+    }
+
+    int max_conn = 10;
+    if (auto max_conn_obj = ipc::codec::find_key(*config_obj, "max_connections")) {
+        max_conn = static_cast<int>(ipc::codec::as_int64(*max_conn_obj, 10));
+        LOG4CPLUS_DEBUG(server_logger(), "max_connections set to " << max_conn);
+    }
+    IedServerConfig_setMaxMmsConnections(inst->config, max_conn);
+
+    if(!init_iedServer(inst, instance_id, response)) {
+        return true;
+    }
+
+    response["result"] = {
+        {"success", true},
+        {"instance_id", instance_id},
+    };
+    response["error"] = nullptr;
+    return true;
+}
+
+bool ServerConfigAction::init_iedServer(ServerInstanceContext* inst, const std::string& instance_id, nlohmann::json& response) {
+    if (inst->server) {
+        IedServer_stop(inst->server);
+        IedServer_destroy(inst->server);
+        inst->server = nullptr;
+    }
+    
+    inst->server = IedServer_createWithConfig(inst->model, nullptr, inst->config);
+    if(!inst->server){
+        LOG4CPLUS_ERROR(server_logger(), "Failed to create server for instance " << instance_id << " after configuration update");
+        pack_error_response(response, "failed to create server with the existing model and updated configuration");
+        return false;
+    }
+    LOG4CPLUS_INFO(server_logger(), "Server instance " << instance_id << " re-created with updated configuration");
+
+    return true;
+}
+
+}// namespace ipc::actions

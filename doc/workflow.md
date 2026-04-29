@@ -16,8 +16,14 @@ sequenceDiagram;
         Server->>+Action: 删除已有Model数据
         Action->>-Server: 删除完成
     end
-    Server->>+Action: 生成
-    Action->>-Server: 载入完成
+    Server->>+Action: 创建IedModel示例
+    Action->>-Server: 创建完成
+    opt 已有IedServer实例
+        Server->>+Action: 销毁已有IedServer实例
+        Action->>-Server: 销毁完成
+    end
+    Server->>+Action: 创建IedServer实例
+    Action->>-Server: 创建完成
     Server->>UI: 载入完成
 ```
 
@@ -31,11 +37,12 @@ ActionServer.
   LoadModelAndStartServerReturnsSuccess
 
 - 载入一个Model数据，验证载入完成
-  * `ActionServerSharedContextTest.LoadDefaultModelReturnsSuccess`
+  * `ActionServerModelTest.LoadDefaultModelReturnsSuccess`
+  * `ActionServerModelTest.LoadReportModelReturnsSuccess`
+  * `ActionServerModelTest.LoadControlModelReturnsSuccess`
+  * `ActionServerModelTest.LoadSettingGroupModelReturnsSuccess`
 - 载入一个Model数据后再载入另一个Model数据，验证旧数据被删除且新数据载入完成
-  * `ActionServerSharedContextTest.LoadReportModelReturnsSuccess`
-  * `ActionServerSharedContextTest.LoadControlModelReturnsSuccess`
-  * `ActionServerSharedContextTest.LoadSettingGroupModelReturnsSuccess`
+  * `ActionServerModelTest.ReloadModelReplacesExistingModel`
 
 ### 启动服务 server.start
 ```mermaid
@@ -50,7 +57,7 @@ sequenceDiagram;
 
 测试用例:
 - 启动服务后验证服务启动完成
-  * `ActionServer.LoadModelAndStartServerReturnsSuccess`
+  * `ActionServer.StartServerReturnsSuccess`
 
 ### 读取数据
 ```mermaid
