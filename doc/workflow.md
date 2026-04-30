@@ -75,11 +75,33 @@ sequenceDiagram;
 ```
 测试用例:
 - 未加载模型时请求数据，验证返回错误
-  * `ActionServerOperationTest.GetValuesInvalidRequestReturnsError`
+  * `ActionServerOperationTest.ReadValuesInvalidRequestReturnsError`
 - 请求的Reference不存在，验证返回错误
-  * `ActionServerOperationTest.GetValuesNonExistentReferenceReturnsError`
+  * `ActionServerOperationTest.ReadValuesNonExistentReferenceReturnsError`
 - 请求数据，验证返回正确数据
-  * `ActionServerOperationTest.GetValuesValidReferenceReturnsValue`
+  * `ActionServerOperationTest.ReadValuesValidReferenceReturnsValue`
+
+### 写入数据
+```mermaid
+sequenceDiagram;
+    autonumber
+    participant UI
+    participant Server
+    participant Action
+    UI->>Server: 设定数据
+    Note right of UI: server.write
+    Server->>+Action: 写入数据
+    Action->>-Server: 返回结果
+    Server->>UI: 返回结果
+```
+测试用例:
+- 请求的Reference不存在，验证返回错误
+  * `ActionServerOperationTest.WriteDataValueNonExistentReferenceReturnsError`
+- 请求的Reference存在设定值格式不匹配，验证返回错误
+  * `ActionServerOperationTest.WriteDataValueInvalidFormatReturnsError`
+- 请求的Reference存在且功能约束支持写入，验证返回成功
+  * `ActionServerOperationTest.WriteDataValueValidReferenceReturnsSuccess`
+
 
 ## 数据变更联动
 

@@ -313,7 +313,7 @@ TEST_F(ActionServerModelTest, StartMissingPayloadReturnsError) {
     EXPECT_EQ(get_error_message(response), "Missing payload");
 }
 
-TEST_F(ActionServerOperationTest, GetValuesInvalidRequestReturnsError) {
+TEST_F(ActionServerOperationTest, ReadValuesInvalidRequestReturnsError) {
     BackendContext localContext;
     nlohmann::json payload = {
         {"instance_id", "default_instance"},
@@ -324,7 +324,7 @@ TEST_F(ActionServerOperationTest, GetValuesInvalidRequestReturnsError) {
     EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, or references array");
 }
 
-TEST_F(ActionServerOperationTest, GetValuesNonExistentReferenceReturnsError) {
+TEST_F(ActionServerOperationTest, ReadValuesNonExistentReferenceReturnsError) {
     nlohmann::json payload = {
         {"instance_id", "default_instance"},
         {"items", nlohmann::json::array({
@@ -354,7 +354,40 @@ TEST_F(ActionServerOperationTest, GetValuesNonExistentReferenceReturnsError) {
     EXPECT_FALSE(response["result"][1].contains("value")) << "Did not expect value for valid reference with missing value: " << response.dump(2);
 }
 
-TEST_F(ActionServerOperationTest, GetValuesValidReferenceReturnsValue) {
+/*
+ *
+{
+  "id": "test-id",
+  "result": [
+    {
+      "fc": "MX",
+      "reference": "simpleIOGenericIO/GGIO1.AnIn1",
+      "value": {
+        "mag": {
+          "f": 0.0
+        },
+        "q": "0000000000000",
+        "t": "19700101000000.000Z"
+      }
+    },
+    {
+      "fc": "ST",
+      "reference": "simpleIOGenericIO/GGIO1.SPCSO1",
+      "value": {
+        "q": "0000000000000",
+        "stVal": false,
+        "t": "19700101000000.000Z"
+      }
+    },
+    {
+      "fc": "ST",
+      "reference": "simpleIOGenericIO/GGIO1.SPCSO1.q",
+      "value": "0000000000000"
+    }
+  ]
+}
+ */
+TEST_F(ActionServerOperationTest, ReadValuesValidReferenceReturnsValue) {
     nlohmann::json payload = {
         {"instance_id", "default_instance"},
         {"items", nlohmann::json::array({
@@ -373,8 +406,6 @@ TEST_F(ActionServerOperationTest, GetValuesValidReferenceReturnsValue) {
         })}
     };
     nlohmann::json response = execute_action_json("server.read", context, payload);
-
-    std::cout << "Response: " << response.dump(2) << std::endl;
 
     EXPECT_EQ(get_error_message(response), "");
     ASSERT_TRUE(response.contains("result")) << "Response does not contain 'result': " << response.dump(2);
@@ -396,15 +427,148 @@ TEST_F(ActionServerOperationTest, GetValuesValidReferenceReturnsValue) {
     ASSERT_TRUE(response["result"][2].contains("value")) << "Response item does not contain 'value': " << response.dump(2);
 }
 
-TEST_F(ActionServerOperationTest, SetDataValueInvalidRequestReturnsError) {
+TEST_F(ActionServerOperationTest, WriteValuesInvalidRequestReturnsError) {
+    BackendContext localContext;
     nlohmann::json payload = {
         {"instance_id", "default_instance"},
-        {"reference", "PROT/XCBR1.Pos.stVal"},
-        {"value", 1}
+        {"items", nlohmann::json::array({
+            {
+                {"reference", "PROT/XCBR1.Pos.stVal"},
+                {"value", 1}
+            }
+        })}
     };
-    nlohmann::json response = execute_action_json("server.set_data_value", context, payload);
+    nlohmann::json response = execute_action_json("server.write", localContext, payload);
+
+    EXPECT_EQ(get_error_message(response), "Invalid request: missing server, model, or items array");
+}
+
+TEST_F(ActionServerOperationTest, WriteValuesNonExistentReferenceReturnsError) {
+    nlohmann::json payload = {
+        {"instance_id", "default_instance"},
+        {"items", nlohmann::json::array({
+            {
+                {"reference", "simpleIOGenericIO/GGIO1.NonExistent"},
+                {"value", 1}
+            }
+        })}
+    };
+    nlohmann::json response = execute_action_json("server.write", context, payload);
 
     EXPECT_EQ(get_error_message(response), "");
+    ASSERT_TRUE(response.contains("result")) << "Response does not contain 'result': " << response.dump(2);
+    ASSERT_TRUE(response["result"].is_array()) << "'result' is not an array: " << response.dump(2);
+    ASSERT_EQ(response["result"].size(), 1u) << "Expected 1 item in 'result', got " << response["result"].size() << ": " << response.dump(2);
+    EXPECT_EQ(response["result"][0]["reference"], "simpleIOGenericIO/GGIO1.NonExistent") << "Reference in response does not match request: " << response.dump(2);
+    EXPECT_EQ(response["result"][0]["success"], false) << "Expected write failure for invalid reference: " << response.dump(2);
+    EXPECT_EQ(response["result"][0]["error"], "Reference not found") << "Expected error message for non-existent reference: " << response.dump(2);
+}
+
+/*
+{
+"items":[
+    {
+      "fc": "MX",
+      "reference": "simpleIOGenericIO/GGIO1.AnIn1",
+      "value": {
+        "mag": {
+          "f": 0.0
+        },
+        "q": "0000000000000",
+        "t": "19700101000000.000Z"
+      }
+    },
+    {
+      "fc": "ST",
+      "reference": "simpleIOGenericIO/GGIO1.SPCSO1",
+      "value": {
+        "q": "0000000000000",
+        "stVal": false,
+        "t": "19700101000000.000Z"
+      }
+    },
+    {
+      "fc": "ST",
+      "reference": "simpleIOGenericIO/GGIO1.SPCSO1.q",
+      "value": "0000000000000"
+    }
+  ]
+}
+*/
+TEST_F(ActionServerOperationTest, WriteValuesBatchReturnsPerItemResults) {
+    nlohmann::json payload = {
+        {"instance_id", "default_instance"},
+        {"items", nlohmann::json::array({
+            {
+                {"reference", "simpleIOGenericIO/GGIO1.AnIn1"},
+                {"fc", "MX"},
+                {"value", {
+                    {"mag", {{"f", 42.0}}},
+                    {"q", "0100000000100"},
+                    {"t", "20240103010709.213Z"}
+                }}
+            },
+            {
+                {"reference", "simpleIOGenericIO/GGIO1.SPCSO1"},
+                {"fc", "ST"},
+                {"value", {
+                    {"q", "0000000000000"},
+                    {"stVal", true},
+                    {"t", "20240101000000.000Z"}
+                }}
+            },
+            {
+                {"reference", "simpleIOGenericIO/GGIO1.SPCSO1.q"},
+                {"fc", "ST"},
+                {"value", "0000000000000"}
+            }
+        })}
+    };
+    nlohmann::json response = execute_action_json("server.write", context, payload);
+
+    EXPECT_EQ(get_error_message(response), "");
+    ASSERT_TRUE(response.contains("result")) << "Response does not contain 'result': " << response.dump(2);
+    ASSERT_TRUE(response["result"].is_array()) << "'result' is not an array: " << response.dump(2);
+    ASSERT_EQ(response["result"].size(), 3u) << "Expected 3 items in 'result', got " << response["result"].size() << ": " << response.dump(2);
+
+    ASSERT_EQ(response["result"][0]["reference"], "simpleIOGenericIO/GGIO1.AnIn1") << "Reference in response does not match request: " << response.dump(2);
+    ASSERT_EQ(response["result"][0]["success"], true) << "Expected write success for valid reference: " << response.dump(2);
+    ASSERT_FALSE(response["result"][0].contains("error")) << "Did not expect error for valid reference: " << response.dump(2);
+
+    ASSERT_EQ(response["result"][1]["reference"], "simpleIOGenericIO/GGIO1.SPCSO1") << "Reference in response does not match request: " << response.dump(2);
+    ASSERT_EQ(response["result"][1]["success"], true) << "Expected write success for valid reference: " << response.dump(2);
+    ASSERT_FALSE(response["result"][1].contains("error")) << "Did not expect error for valid reference: " << response.dump(2);
+
+    ASSERT_EQ(response["result"][2]["reference"], "simpleIOGenericIO/GGIO1.SPCSO1.q") << "Reference in response does not match request: " << response.dump(2);
+    ASSERT_EQ(response["result"][2]["success"], true) << "Expected write success for valid reference: " << response.dump(2);
+    ASSERT_FALSE(response["result"][2].contains("error")) << "Did not expect error for valid reference: " << response.dump(2);
+
+    nlohmann::json read_payload = {
+        {"instance_id", "default_instance"},
+        {"items", nlohmann::json::array({
+            {
+                {"reference", "simpleIOGenericIO/GGIO1.SPCSO1.stVal"},
+                {"fc", "ST"}
+            },
+            {
+                {"reference", "simpleIOGenericIO/GGIO1.AnIn1"},
+                {"fc", "MX"},
+            }
+        })}
+    };
+    nlohmann::json read_response = execute_action_json("server.read", context, read_payload);
+
+    ASSERT_EQ(get_error_message(read_response), "");
+    ASSERT_TRUE(read_response.contains("result")) << "Read response does not contain 'result': " << read_response.dump(2);
+    ASSERT_TRUE(read_response["result"].is_array()) << "Read 'result' is not an array: " << read_response.dump(2);
+    ASSERT_EQ(read_response["result"].size(), 2u) << "Expected 2 items in read 'result', got " << read_response["result"].size() << ": " << read_response.dump(2);
+    ASSERT_EQ(read_response["result"][0]["value"], true) << "Expected updated boolean value after write: " << read_response.dump(2);
+
+    ASSERT_TRUE(read_response["result"][1]["value"].contains("mag")) << "Expected 'mag' in read value for analog reference: " << read_response.dump(2);
+    ASSERT_TRUE(read_response["result"][1]["value"]["mag"].contains("f")) << "Expected 'f' in 'mag' for analog reference: " << read_response.dump(2);
+    ASSERT_EQ(read_response["result"][1]["value"]["mag"]["f"], 42.0) << "Expected updated float value after write: " << read_response.dump(2);
+    ASSERT_EQ(read_response["result"][1]["value"]["q"], "0100000000100") << "Expected updated quality value after write: " << read_response.dump(2);
+    ASSERT_EQ(read_response["result"][1]["value"]["t"], "20240103010709.213Z") << "Expected updated timestamp value after write: " << read_response.dump(2);
 }
 
 TEST(ActionServer, GetClientsReturnsPayload) {

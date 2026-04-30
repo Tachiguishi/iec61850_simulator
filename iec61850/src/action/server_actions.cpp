@@ -167,53 +167,234 @@ nlohmann::json attribute_value_json(IedServer server, ModelNode* dataModel, Func
     return result;
 }
 
-void update_attribute_value(IedServer server, DataAttribute* da, const nlohmann::json& value_obj) {
-    if (!da || !server) {
-        return;
+bool update_attribute_value(IedServer server, ModelNode* dataModel, const nlohmann::json& value_obj) {
+    if (!server || !dataModel) {
+        return false;
     }
-    DataAttributeType type = DataAttribute_getType(da);
-    switch (type) {
-        case IEC61850_BOOLEAN:
-            IedServer_updateBooleanAttributeValue(server, da, ipc::codec::as_bool(value_obj));
-            break;
-        case IEC61850_INT8:
-        case IEC61850_INT16:
-        case IEC61850_INT32:
-        case IEC61850_ENUMERATED:
-            IedServer_updateInt32AttributeValue(server, da, static_cast<int32_t>(ipc::codec::as_int64(value_obj)));
-            break;
-        case IEC61850_INT64:
-            IedServer_updateInt64AttributeValue(server, da, static_cast<int64_t>(ipc::codec::as_int64(value_obj)));
-            break;
-        case IEC61850_INT8U:
-        case IEC61850_INT16U:
-        case IEC61850_INT32U:
-            IedServer_updateUnsignedAttributeValue(server, da, static_cast<uint32_t>(ipc::codec::as_int64(value_obj)));
-            break;
-        case IEC61850_FLOAT32:
-            IedServer_updateFloatAttributeValue(server, da, static_cast<float>(ipc::codec::as_double(value_obj)));
-            break;
-        case IEC61850_FLOAT64:
-            IedServer_updateFloatAttributeValue(server, da, static_cast<float>(ipc::codec::as_double(value_obj)));
-            break;
-        case IEC61850_VISIBLE_STRING_32:
-        case IEC61850_VISIBLE_STRING_64:
-        case IEC61850_VISIBLE_STRING_129:
-        case IEC61850_VISIBLE_STRING_255:
-        case IEC61850_UNICODE_STRING_255: {
-            std::string value = ipc::codec::as_string(value_obj, "");
-            char* str_copy = strdup(value.c_str());
-            if (str_copy) {
-                IedServer_updateVisibleStringAttributeValue(server, da, str_copy);
-                free(str_copy);
-            } else {
-                LOG4CPLUS_ERROR(server_logger(), "Failed to allocate string memory for update");
+
+    switch(ModelNode_getType(dataModel)){
+        case ModelNodeType::DataObjectModelType:{
+            if (!value_obj.is_object()) {
+                return false;
             }
-            break;
+
+            LinkedList children = ModelNode_getChildren(dataModel);
+            if (!children) {
+                return false;
+            }
+
+            bool updated_any = false;
+            bool all_success = true;
+            uint32_t child_count = LinkedList_size(children);
+            for (uint32_t i = 0; i < child_count; i++) {
+                LinkedList current = LinkedList_get(children, i);
+                auto* child = static_cast<ModelNode*>(LinkedList_getData(current));
+                if (!child) {
+                    all_success = false;
+                    continue;
+                }
+
+                const char* name = ModelNode_getName(child);
+                if (!name) {
+                    all_success = false;
+                    continue;
+                }
+
+                auto it = value_obj.find(name);
+                if (it == value_obj.end()) {
+                    continue;
+                }
+
+                updated_any = true;
+                if (!update_attribute_value(server, child, *it)) {
+                    all_success = false;
+                }
+            }
+
+            LinkedList_destroyStatic(children);
+            return updated_any && all_success;
         }
-        default:
             break;
+        case ModelNodeType::DataAttributeModelType:{
+            auto* da = reinterpret_cast<DataAttribute*>(dataModel);
+            MmsValue* current_value = IedServer_getAttributeValue(server, da);
+            if (!current_value) {
+                return false;
+            }
+            DataAttributeType da_type = da->type;
+            switch (MmsValue_getType(current_value)) {
+                case MMS_BOOLEAN: {
+                    if (!value_obj.is_boolean()) {
+                        return false;
+                    }
+                    bool new_value = value_obj.get<bool>();
+                    IedServer_updateBooleanAttributeValue(server, da, new_value);
+                }
+                    break;
+                case MMS_INTEGER:{
+                    if (!value_obj.is_number_integer()) {
+                        return false;
+                    }
+                    int32_t new_int_value = value_obj.get<int32_t>();
+                    IedServer_updateInt32AttributeValue(server, da, new_int_value);
+                }
+                    break;
+                case MMS_UNSIGNED:{
+                    if (!value_obj.is_number_unsigned()) {
+                        return false;
+                    }
+                    uint32_t new_uint_value = value_obj.get<uint32_t>();
+                    IedServer_updateUnsignedAttributeValue(server, da, new_uint_value);
+                }
+                    break;
+                case MMS_FLOAT:{
+                    if (!value_obj.is_number()) {
+                        return false;
+                    }
+                    float new_float_value = value_obj.get<float>();
+                    IedServer_updateFloatAttributeValue(server, da, new_float_value);
+                }
+                    break;
+                case MMS_VISIBLE_STRING:
+                case MMS_STRING:{
+                    if (!value_obj.is_string()) {
+                        return false;
+                    }
+                    std::string new_str_value = value_obj.get<std::string>();
+                    IedServer_updateVisibleStringAttributeValue(server, da, const_cast<char*>(new_str_value.c_str()));
+                }
+                    break;
+                case MMS_OCTET_STRING:{
+                    if (!value_obj.is_string()) {
+                        return false;
+                    }
+                    std::string octet_str_value = value_obj.get<std::string>();
+                    std::vector<uint8_t> octet_bytes;
+                    for (size_t i = 0; i < octet_str_value.size(); i += 2) {
+                        if (i + 1 >= octet_str_value.size()) {
+                            return false;
+                        }
+                        uint8_t byte = std::stoul(octet_str_value.substr(i, 2), nullptr, 16);
+                        octet_bytes.push_back(byte);
+                    }
+                    MmsValue_setOctetString(current_value, octet_bytes.data(), octet_bytes.size());
+                }
+                    break;
+                case MMS_BIT_STRING:{
+                    if (!value_obj.is_string()) {
+                        return false;
+                    }
+                    std::string bit_str_value = value_obj.get<std::string>();
+                    uint32_t bitValue = 0;
+                    for (size_t i = 0; i < bit_str_value.size(); i++) {
+                        char c = bit_str_value[i];
+                        if (c != '0' && c != '1') {
+                            return false;
+                        }
+                        if (c == '1') {
+                            bitValue |= (1 << i);
+                        }
+                    }
+                    if(da_type == DataAttributeType::IEC61850_QUALITY) {
+                        IedServer_updateQuality(server, da, bitValue);
+                    }
+                    else {
+                        IedServer_updateBitStringAttributeValue(server, da, bitValue);
+                    }
+                }
+                    break;
+                case MMS_UTC_TIME:
+                case MMS_BINARY_TIME:{
+                    if (!value_obj.is_string()) {
+                        return false;
+                    }
+                    std::string time_str_value = value_obj.get<std::string>();
+
+                    int millis = 0;
+                    if (!time_str_value.empty() && time_str_value.back() == 'Z') {
+                        time_str_value.pop_back();
+                    }
+
+                    size_t dot_pos = time_str_value.find('.');
+                    if (dot_pos != std::string::npos) {
+                        std::string fraction = time_str_value.substr(dot_pos + 1);
+                        time_str_value = time_str_value.substr(0, dot_pos);
+                        if (fraction.empty() || fraction.size() > 3 ||
+                            !std::all_of(fraction.begin(), fraction.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+                            return false;
+                        }
+                        while (fraction.size() < 3) {
+                            fraction.push_back('0');
+                        }
+                        millis = std::stoi(fraction);
+                    }
+
+                    struct tm tm{};
+
+                    const char* formats[] = {
+                        "%Y%m%d%H%M%S",
+                        "%Y%m%dT%H%M%S",
+                        "%Y-%m-%dT%H:%M:%S",
+                    };
+
+                    bool parsed = false;
+                    for (const char* format : formats) {
+                        tm = {};
+                        char* end = strptime(time_str_value.c_str(), format, &tm);
+                        if (end && *end == '\0') {
+                            parsed = true;
+                            break;
+                        }
+                    }
+
+                    if (!parsed) {
+                        return false;
+                    }
+
+                    time_t time_value = timegm(&tm);
+                    IedServer_updateUTCTimeAttributeValue(server, da,
+                                                           static_cast<uint64_t>(time_value) * 1000 + static_cast<uint64_t>(millis));
+                }
+                    break;
+                case MMS_ARRAY:
+                case MMS_STRUCTURE:{
+                    if (!value_obj.is_object()) {
+                        return false;
+                    }
+                    LinkedList children = ModelNode_getChildren(dataModel);
+                    if (!children) {
+                        return false;
+                    }
+                    bool updated_any = false;
+                    bool all_success = true;
+                    uint32_t array_size = MmsValue_getArraySize(current_value);
+                    for (uint32_t i = 0; i < array_size; i++) {
+                        LinkedList current = LinkedList_get(children, i);
+                        ModelNode* child = static_cast<ModelNode*>(LinkedList_getData(current));
+                        const char* name = ModelNode_getName(child);
+                        auto it = value_obj.find(name);
+                        if (it == value_obj.end()) {
+                            continue;
+                        }
+                        updated_any = true;
+                        if (!update_attribute_value(server, child, *it)) {
+                            all_success = false;
+                        }
+                    }
+                    LinkedList_destroyStatic(children);
+                    return updated_any && all_success;
+                }
+                    break;
+                default:
+                    return false;
+            }
+        }
+            break;
+        default:
+            return false;
     }
+
+    return true;
 }
 
 } // namespace
@@ -382,9 +563,9 @@ public:
     }
 };
 
-class ServerSetDataValueAction final : public ActionHandler {
+class ServerWriteAction final : public ActionHandler {
 public:
-    ActionMethod name() const override { return ActionMethod::ServerSetDataValue; }
+    ActionMethod name() const override { return ActionMethod::ServerWrite; }
 
     bool handle(ActionContext& ctx, nlohmann::json& response) override {
         if (!check_payload_existence(ctx, response)) {
@@ -399,27 +580,57 @@ public:
             return true;
         }
 
-        auto ref_obj = ipc::codec::find_key(ctx.payload, "reference");
-        auto value_obj = ipc::codec::find_key(ctx.payload, "value");
-
         auto* inst = ctx.context.get_server_instance(instance_id);
-        if (!inst || !inst->server || !inst->model || !ref_obj || !value_obj) {
-            LOG4CPLUS_ERROR(server_logger(), "server.set_data_value invalid request for instance " << instance_id);
-            pack_error_response(response, "Invalid request: missing server, model, reference, or value");
+        if (!inst || !inst->server || !inst->model) {
+            LOG4CPLUS_ERROR(server_logger(), "server.write invalid request for instance " << instance_id);
+            pack_error_response(response, "Invalid request: missing server, model, or items array");
             return true;
         }
 
-        std::string reference = ipc::codec::as_string(*ref_obj, "");
-        LOG4CPLUS_DEBUG(server_logger(), "Update value: " << reference);
-        ModelNode* node = IedModel_getModelNodeByObjectReference(inst->model, reference.c_str());
-        if (node && ModelNode_getType(node) == DataAttributeModelType) {
-            auto* da = reinterpret_cast<DataAttribute*>(node);
-            IedServer_lockDataModel(inst->server);
-            update_attribute_value(inst->server, da, *value_obj);
-            IedServer_unlockDataModel(inst->server);
+        auto items_obj = ipc::codec::find_key(ctx.payload, "items");
+        if(!items_obj || !items_obj->is_array()){
+            LOG4CPLUS_ERROR(server_logger(), "server.write: missing or invalid 'items' array for instance " << instance_id);
+            pack_error_response(response, "Invalid request: missing or invalid 'items' array");
+            return true;
         }
 
-        response["result"] = ipc::codec::make_success_payload();
+        nlohmann::json results = nlohmann::json::array();
+        IedServer_lockDataModel(inst->server);
+        for (const auto& write_item : *items_obj) {
+            std::string reference = write_item.value("reference", "");
+            std::string fc = write_item.value("fc", ""); // Optional functional constraint for better error messages
+            nlohmann::json result = {
+                {"reference", reference},
+                {"fc", fc},
+            };
+
+            auto item_value = ipc::codec::find_key(write_item, "value");
+            if (!item_value || item_value->is_null()) {
+                result["success"] = false;
+                result["error"] = "Invalid value";
+                results.push_back(result);
+                continue;
+            }
+
+            ModelNode* node = IedModel_getModelNodeByObjectReference(inst->model, reference.c_str());
+            if (!node) {
+                result["success"] = false;
+                result["error"] = "Reference not found";
+                results.push_back(result);
+                continue;
+            }
+
+           bool update_result = update_attribute_value(inst->server, node, *item_value);
+            result["success"] = update_result;
+            if(!update_result) {
+                result["error"] = "value update failed (unsupported type or invalid value)";
+            }
+
+            results.push_back(result);
+        }
+        IedServer_unlockDataModel(inst->server);
+
+        response["result"] = results;
         return true;
     }
 };
@@ -441,12 +652,17 @@ public:
             return true;
         }
 
-        auto items_obj = ipc::codec::find_key(ctx.payload, "items");
-
         auto* inst = ctx.context.get_server_instance(instance_id);
-        if (!inst || !inst->server || !inst->model || !items_obj || !items_obj->is_array()) {
+        if (!inst || !inst->server || !inst->model) {
             LOG4CPLUS_ERROR(server_logger(), "server.read invalid request for instance " << instance_id);
             pack_error_response(response, "Invalid request: missing server, model, or references array");
+            return true;
+        }
+
+        auto items_obj = ipc::codec::find_key(ctx.payload, "items");
+        if(!items_obj || !items_obj->is_array()){
+            LOG4CPLUS_ERROR(server_logger(), "server.write: missing or invalid 'items' array for instance " << instance_id);
+            pack_error_response(response, "Invalid request: missing or invalid 'items' array");
             return true;
         }
 
@@ -455,14 +671,15 @@ public:
             std::string reference = ref_item.value("reference", "");
             std::string fc = ref_item.value("fc", "");
             ModelNode* node = IedModel_getModelNodeByObjectReference(inst->model, reference.c_str());
-            nlohmann::json value;
+            nlohmann::json value = {
+                {"reference", reference},
+                {"fc", fc},
+            };
             if (node) {
                 FunctionalConstraint fc_enum = FunctionalConstraint_fromString(fc.c_str());
                 if(fc_enum == IEC61850_FC_NONE) {
                     LOG4CPLUS_WARN(server_logger(), "Unknown functional constraint '" << fc << "' for reference " << reference);
-                    value = {
-                        {"error", "Unknown functional constraint: " + fc},
-                    };
+                    value["error"] = "Unknown functional constraint: " + fc;
                 }
                 else{
                     if(fc_enum == IEC61850_FC_SE){
@@ -471,23 +688,15 @@ public:
                     nlohmann::json result = attribute_value_json(inst->server, node, fc_enum);
                     if(result.is_null()) {
                         LOG4CPLUS_WARN(server_logger(), "Failed to read value for reference " << reference << " with functional constraint " << fc);
-                        value = {
-                            {"error", "Failed to read value for reference with functional constraint: " + fc},
-                        };
+                        value["error"] = "Failed to read value for reference with functional constraint: " + fc;
                     } else {
-                        value = {
-                            {"value", result}
-                        };
+                        value["value"] = result;
                     }
                 }
             } else {
-                value = {
-                    {"error", "Reference not found"},
-                };
+                value["error"] = "Reference not found";
             }
 
-            value["reference"] = reference;
-            value["fc"] = fc;
             values.push_back(value);
         }
 
@@ -647,7 +856,7 @@ void register_server_actions(ActionRegistry& registry) {
     registry.add(std::make_unique<ServerRemoveAction>());
     registry.add(std::make_unique<ServerConfigAction>());
     registry.add(std::make_unique<ServerLoadModelAction>());
-    registry.add(std::make_unique<ServerSetDataValueAction>());
+    registry.add(std::make_unique<ServerWriteAction>());
     registry.add(std::make_unique<ServerReadAction>());
     registry.add(std::make_unique<ServerGetClientsAction>());
     registry.add(std::make_unique<ServerListInstancesAction>());

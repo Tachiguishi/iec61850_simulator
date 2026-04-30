@@ -193,14 +193,122 @@ accept_loop_threaded()
       "reference": "LDName/LNName[.Name[. ...]]",
       "fc": "FC",
       "value": <any>,
-      "quality": "GOOD|BAD|UNCERTAIN",
-      "timestamp": "ISO8601 string",
       "error": null | { code, message }
     },
     ...
   ]
 }
 ```
+返回示例:
+```json
+{
+  "id": "test-id",
+  "result": [
+    {
+      "fc": "MX",
+      "reference": "simpleIOGenericIO/GGIO1.AnIn1",
+      "value": {
+        "mag": {
+          "f": 0.0
+        },
+        "q": "0000000000000",
+        "t": "19700101000000.000Z"
+      }
+    },
+    {
+      "fc": "ST",
+      "reference": "simpleIOGenericIO/GGIO1.SPCSO1",
+      "value": {
+        "q": "0000000000000",
+        "stVal": false,
+        "t": "19700101000000.000Z"
+      }
+    },
+    {
+      "fc": "ST",
+      "reference": "simpleIOGenericIO/GGIO1.SPCSO1.q",
+      "value": "0000000000000"
+    }
+  ]
+}
+```
+- `server.write`
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "server.write",
+  "id": "uuid",
+  "params": {
+    "instance_id": "optional_string",
+    "items": [{
+        "reference": "LDName/LNName[.Name[. ...]]",
+        "value": <any>
+      }, ...]
+  }
+},
+{
+  "jsonrpc": "2.0",
+  "id": "uuid",
+  "result": [
+    {
+      "reference": "LDName/LNName[.Name[. ...]]",
+      "success": true,
+      "error": null | { code, message }
+    },
+    ...
+  ]
+}
+```
+示例:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "server.write",
+  "id": "uuid",
+  "params": {
+    "instance_id": "optional_string",
+    "items": [{
+      "fc": "MX",
+      "reference": "simpleIOGenericIO/GGIO1.AnIn1",
+      "value": {
+        "mag": {
+          "f": 42.0
+        },
+        "q": "0100000000100",
+        "t": "19700101000000.000Z"
+      }
+    },
+    {
+      "fc": "ST",
+      "reference": "simpleIOGenericIO/GGIO1.SPCSO1",
+      "value": {
+        "q": "0000000000000",
+        "stVal": false,
+        "t": "19700101000000.000Z"
+      }
+    },
+    {
+      "fc": "ST",
+      "reference": "simpleIOGenericIO/GGIO1.SPCSO1.q",
+      "value": "0000000000000"
+    }]
+  }
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 - `server.get_clients`

@@ -14,7 +14,7 @@ enum class ActionMethod {
 	ServerRemove,		// 移除服务实例
 	ServerLoadModel,	// 加载模型
 	ServerConfig,		// 配置服务实例
-	ServerSetDataValue,	// 设置数据值
+	ServerWrite,		// 写入数据值
 	ServerRead,			// 读取数据值
 	ServerGetClients,	// 获取客户端列表
 	ServerListInstances,	// 列出实例
