@@ -13,24 +13,43 @@ public:
 };
 
 ::testing::Environment* const kLoggingEnvironment = ::testing::AddGlobalTestEnvironment(new LoggingEnvironment());
-}
 
 class NetworkConfigTest : public ::testing::Test {
 protected:
-	static std::string test_interface;
+	std::string test_interface;
 
-	static void SetUpTestSuite() {
-		if(!test_interface.empty()) {
-			return;
-		}
-		auto interfaces = network::get_network_interfaces();
-		ASSERT_FALSE(interfaces.empty()) << "No valid network interfaces found for testing";
-		test_interface = interfaces[0].name;
+	void SetUp() override {
+		test_interface = network::get_default_interface_name("");
+		ASSERT_FALSE(test_interface.empty()) << "No valid network interfaces found for testing";
 		std::cout << "Using interface '" << test_interface << "' for testing" << std::endl;
 	}
 };
+}
 
-std::string NetworkConfigTest::test_interface = ""; // 测试网卡名称，根据实际环境调整，为空则自动选择
+TEST(NetworkTest, GetDefaultInterfaceReturnsValidInterface) {
+	auto interfaces = network::get_network_interfaces();
+	ASSERT_FALSE(interfaces.empty()) << "No network interfaces found";
+
+	// 获取默认接口名称
+	std::string default_name = network::get_default_interface_name("");
+	ASSERT_FALSE(default_name.empty()) << "Default interface name is empty";
+
+	// 验证默认接口存在于接口列表中
+	auto it = std::find_if(interfaces.begin(), interfaces.end(), [&default_name](const network::InterfaceInfo& iface) {
+		return iface.name == default_name;
+	});
+	ASSERT_NE(it, interfaces.end()) << "Default interface '" << default_name << "' not found in interface list";
+
+	std::string default_name_with_nonexistent = network::get_default_interface_name("nonexistent0");
+	ASSERT_FALSE(default_name_with_nonexistent.empty()) << "Default interface name should not be empty even if specified name does not exist";
+	ASSERT_NE(default_name_with_nonexistent, "nonexistent0") << "Default interface name should not match nonexistent name";
+	ASSERT_EQ(default_name_with_nonexistent, default_name) << "Default interface name should fall back to actual default interface";
+
+	std::string last_infterface_name = interfaces.back().name;
+	std::string default_name_with_existing = network::get_default_interface_name(last_infterface_name);
+	ASSERT_FALSE(default_name_with_existing.empty()) << "Default interface name should not be empty when specified name exists";
+	ASSERT_EQ(default_name_with_existing, last_infterface_name) << "Default interface name should match specified existing name";
+}
 
 TEST_F(NetworkConfigTest, GetNetworkInterfacesReturnsNonEmptyListAndValidData) {
 	auto interfaces = network::get_network_interfaces();

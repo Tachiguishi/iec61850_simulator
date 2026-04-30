@@ -97,17 +97,9 @@ iec61850_simulator/
 cd /path/to/iec61850_simulator
 ```
 
-2. 创建虚拟环境 (推荐)
+2. 安装依赖
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/macOS
-# 或
-.\venv\Scripts\activate   # Windows
-```
-
-3. 安装依赖
-```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ## 使用方法

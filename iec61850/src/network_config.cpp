@@ -162,6 +162,33 @@ std::vector<InterfaceInfo> get_network_interfaces() {
     return interfaces;
 }
 
+InterfaceInfo get_default_interface(std::vector<InterfaceInfo>& interfaces, const std::string& default_interface_name){
+    if (!default_interface_name.empty()) {
+        auto it = std::find_if(interfaces.begin(), interfaces.end(), [&](const InterfaceInfo& iface) {
+            return iface.name == default_interface_name;
+        });
+        if (it != interfaces.end()) {
+            return *it;
+        }
+    }
+    
+    // 如果没有指定或找不到，返回第一个非loopback接口
+    for (const auto& iface : interfaces) {
+        if (iface.name != "lo") {
+            return iface;
+        }
+    }
+    
+    // 如果没有其他接口，返回一个默认的空接口
+    return InterfaceInfo{};
+}
+
+std::string get_default_interface_name(const std::string& default_interface_name){
+    auto interfaces = get_network_interfaces();
+    InterfaceInfo default_iface = get_default_interface(interfaces, default_interface_name);
+    return default_iface.name;
+}
+
 bool add_ip_address(const std::string& interface_name, 
                    const std::string& ip_address, 
                    int prefix_len,

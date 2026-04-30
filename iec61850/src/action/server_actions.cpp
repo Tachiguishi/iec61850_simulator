@@ -452,12 +452,13 @@ public:
             IedServer_setLocalIpAddress(inst->server, inst->ip_address.c_str());
         }
 
-        if (network::should_configure_ip(ip_address) && !ctx.context.global_interface_name.empty()) {
-            if (network::add_ip_address(ctx.context.global_interface_name, ip_address, ctx.context.global_prefix_len)) {
+        std::string interface_name = network::get_default_interface_name(ctx.context.global_interface_name);
+        if (network::should_configure_ip(ip_address) && !interface_name.empty()) {
+            if (network::add_ip_address(interface_name, ip_address, ctx.context.global_prefix_len)) {
                 inst->ip_configured = true;
-                LOG4CPLUS_INFO(server_logger(), "Configured IP " << ip_address << " on " << ctx.context.global_interface_name);
+                LOG4CPLUS_INFO(server_logger(), "Configured IP " << ip_address << " on " << interface_name);
             } else {
-                LOG4CPLUS_WARN(server_logger(), "Failed to configure IP " << ip_address << " on " << ctx.context.global_interface_name);
+                LOG4CPLUS_WARN(server_logger(), "Failed to configure IP " << ip_address << " on " << interface_name);
             }
         } else {
             LOG4CPLUS_INFO(server_logger(), "Using IP " << ip_address << " without additional configuration");
@@ -793,10 +794,14 @@ public:
             });
         }
 
+        network::InterfaceInfo default_iface = network::get_default_interface(interfaces, ctx.context.global_interface_name);
         nlohmann::json current_interface = nullptr;
-        if (!ctx.context.global_interface_name.empty()) {
+        if(!default_iface.name.empty()){
             current_interface = {
-                {"name", ctx.context.global_interface_name},
+                {"name", default_iface.name},
+                {"description", default_iface.description},
+                {"is_up", default_iface.is_up},
+                {"addresses", default_iface.addresses},
                 {"prefix_len", ctx.context.global_prefix_len},
             };
         }

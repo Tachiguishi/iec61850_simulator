@@ -19,6 +19,8 @@ struct InterfaceInfo {
  * 获取系统所有网络接口列表
  */
 std::vector<InterfaceInfo> get_network_interfaces();
+InterfaceInfo get_default_interface(std::vector<InterfaceInfo>& interfaces, const std::string& default_interface_name);
+std::string get_default_interface_name(const std::string& default_interface_name);
 
 /**
  * 添加IP地址到指定网卡（带label）
