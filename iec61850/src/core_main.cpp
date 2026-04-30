@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
             std::cout << "Version: " << VERSION_STRING << std::endl;
             std::cout << "Commit: " << GIT_VERSION_STRING << std::endl;
-            std::cout << "Build Time: " << BUILD_TIMESTAMP << std::endl;
+            std::cout << "Build Info: " << BUILD_INFO << std::endl;
             return 0;
         }
 
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
     init_logging(config_path);
 
     LOG4CPLUS_INFO(core_logger(), "iec61850_core starting");
-    LOG4CPLUS_INFO(core_logger(), "Version: " << VERSION_STRING << "(" << GIT_VERSION_STRING << ") at " << BUILD_TIMESTAMP);
+    LOG4CPLUS_INFO(core_logger(), "Version: " << VERSION_STRING << "(" << GIT_VERSION_STRING << ") at " << BUILD_INFO);
     LOG4CPLUS_INFO(core_logger(), "Socket: " << socket_path);
     LOG4CPLUS_INFO(core_logger(), "Parent death signal: " << (enable_pdeathsig ? "enabled" : "disabled"));
 

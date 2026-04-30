@@ -31,12 +31,34 @@ if(NOT GIT_VERSION)
 	set(GIT_VERSION "unknown")
 endif()
 
+execute_process(
+	COMMAND ${CMAKE_CXX_COMPILER} -dumpfullversion -dumpversion
+	OUTPUT_VARIABLE GXX_VERSION
+	OUTPUT_STRIP_TRAILING_WHITESPACE
+	ERROR_QUIET
+)
+if(NOT GXX_VERSION)
+	set(GXX_VERSION "unknown")
+endif()
+
+execute_process(
+	COMMAND getconf GNU_LIBC_VERSION
+	OUTPUT_VARIABLE GLIBC_VERSION
+	OUTPUT_STRIP_TRAILING_WHITESPACE
+	ERROR_QUIET
+)
+if(NOT GLIBC_VERSION)
+	set(GLIBC_VERSION "unknown")
+endif()
+
+set(BUILD_INFO_STRING "${CURRENT_TIMESTAMP},g++ ${GXX_VERSION},${GLIBC_VERSION}")
+
 # msgpack-c is header-only; enforce no-Boost usage at compile time
 target_compile_definitions(iec61850_core PRIVATE
 	MSGPACK_NO_BOOST=1
 	VERSION_STRING="${VERSION}"
 	GIT_VERSION_STRING="${GIT_VERSION}"
-	BUILD_TIMESTAMP="${CURRENT_TIMESTAMP}"
+	BUILD_INFO="${BUILD_INFO_STRING}"
 )
 
 add_custom_command(TARGET iec61850_core POST_BUILD
